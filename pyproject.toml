@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "discvault"
+version = "0.1.0"
+description = "CD archiver — disc image backup, audio rip, FLAC + MP3 encode, metadata lookup"
+requires-python = ">=3.10"
+dependencies = [
+    "rich>=13.0",
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+tui = ["textual>=0.47"]
+all = ["discvault[tui]"]
+
+[project.scripts]
+discvault = "discvault.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["discvault*"]
