@@ -41,6 +41,22 @@ def track_filename(track_num: int, track_total: int, title: str, ext: str = "") 
     return f"{name}.{ext}" if ext else name
 
 
+def image_dir(album_root: Path) -> Path:
+    return album_root / "image"
+
+
+def flac_dir(album_root: Path) -> Path:
+    return album_root / "flac"
+
+
+def mp3_dir(album_root: Path) -> Path:
+    return album_root / "mp3"
+
+
+def ogg_dir(album_root: Path) -> Path:
+    return album_root / "ogg"
+
+
 def prune_empty_dirs(start: Path, stop_at: Path) -> None:
     """Remove empty directories from *start* up to (but not including) *stop_at*."""
     current = start

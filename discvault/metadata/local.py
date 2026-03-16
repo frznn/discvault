@@ -1,7 +1,6 @@
 """Local CDDB cache provider (~/.cddb/)."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from .types import DiscInfo, Metadata
@@ -9,10 +8,6 @@ from .gnudb import parse_cddb_record
 
 
 _CDDB_CACHE_DIR = Path.home() / ".cddb"
-_CATEGORIES = [
-    "rock", "pop", "jazz", "classical", "blues", "country", "folk",
-    "newage", "reggae", "soundtrack", "misc", "data",
-]
 
 
 def lookup(disc_info: DiscInfo, debug: bool = False) -> list[Metadata]:
@@ -30,7 +25,7 @@ def lookup(disc_info: DiscInfo, debug: bool = False) -> list[Metadata]:
             if candidate.is_file():
                 try:
                     text = candidate.read_text(errors="replace")
-                    meta = parse_cddb_record(text, source="LocalCDDB")
+                    meta = parse_cddb_record(text, source="Local CDDB Cache")
                     if meta and meta not in results:
                         results.append(meta)
                 except Exception as exc:
