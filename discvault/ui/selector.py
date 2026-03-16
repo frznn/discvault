@@ -1,12 +1,10 @@
-"""Interactive metadata candidate selector.
-
-Phase 1: simple numbered list prompt in the terminal.
-Phase 2: full Textual TUI (imported lazily; requires `pip install discvault[tui]`).
-"""
+"""Interactive metadata candidate selector."""
 from __future__ import annotations
 
+import sys
+
 from ..metadata.types import Metadata
-from .console import console
+from .console import console, log
 
 
 # ---------------------------------------------------------------------------
@@ -15,20 +13,18 @@ from .console import console
 
 def select_candidate(
     candidates: list[Metadata],
+    disc_info=None,
     tui: bool = False,
 ) -> Metadata | None:
     """
     Present the metadata candidates and let the user choose one.
 
-    Returns the selected Metadata, or None if the user skips.
+    Returns the selected Metadata, or None if the user wants manual entry.
     With tui=True, attempts to launch the Textual TUI; falls back to
     the terminal prompt if textual is not installed.
     """
     if not candidates:
         return None
-    if len(candidates) == 1:
-        _print_candidate(1, candidates[0])
-        return candidates[0]
 
     if tui:
         try:
@@ -36,51 +32,115 @@ def select_candidate(
         except ImportError:
             console.print("[warning]textual not installed — falling back to terminal prompt.[/warning]")
 
-    return _terminal_select(candidates)
+    return _terminal_select(candidates, disc_info)
 
 
 # ---------------------------------------------------------------------------
-# Terminal (Phase 1)
+# Terminal — one-candidate-at-a-time with navigation
 # ---------------------------------------------------------------------------
 
-def _terminal_select(candidates: list[Metadata]) -> Metadata | None:
-    console.print("\n[bold]Found metadata candidates:[/bold]")
-    for i, m in enumerate(candidates, 1):
-        _print_candidate(i, m)
-    console.print(f"  [dim]{len(candidates) + 1}. Skip (no metadata)[/dim]")
+def _terminal_select(candidates: list[Metadata], disc_info=None) -> Metadata | None:
+    count = len(candidates)
+    idx = 0
 
     while True:
+        _print_candidate_preview(idx, count, candidates[idx], disc_info)
+
+        if count > 1:
+            prompt = f"\nUse this? [Y=use, n=next, p=prev, l=list, m=manual, q=quit, 1-{count}=select]: "
+        else:
+            prompt = "\nUse this? [Y=use, m=manual, q=quit]: "
+
         try:
-            raw = console.input(
-                f"\n[bold]Select [1–{len(candidates) + 1}][/bold] (default=1): "
-            ).strip()
+            answer = console.input(prompt).strip().lower()
         except (EOFError, KeyboardInterrupt):
             return None
 
-        if raw == "":
-            return candidates[0]
-        if raw.isdigit():
-            choice = int(raw)
-            if 1 <= choice <= len(candidates):
-                return candidates[choice - 1]
-            if choice == len(candidates) + 1:
-                return None
-        console.print(f"[warning]Please enter a number between 1 and {len(candidates) + 1}.[/warning]")
+        if answer in ("", "y", "yes"):
+            return candidates[idx]
+        elif answer in ("n", "next"):
+            if count > 1:
+                idx = (idx + 1) % count
+            else:
+                log("Only one metadata option available.")
+        elif answer in ("p", "prev"):
+            if count > 1:
+                idx = (idx - 1 + count) % count
+            else:
+                log("Only one metadata option available.")
+        elif answer == "l":
+            if count > 1:
+                _print_candidate_list(candidates)
+                try:
+                    pick = console.input(
+                        f"Choose [1-{count}] or Enter to keep current: "
+                    ).strip()
+                except (EOFError, KeyboardInterrupt):
+                    pass
+                else:
+                    if pick.isdigit() and 1 <= int(pick) <= count:
+                        idx = int(pick) - 1
+            else:
+                log("Only one metadata option available.")
+        elif answer in ("m", "manual"):
+            return None
+        elif answer in ("q", "quit"):
+            console.print("Aborted.")
+            sys.exit(0)
+        elif answer.isdigit() and 1 <= int(answer) <= count:
+            idx = int(answer) - 1
+        else:
+            console.print(f"[warning]Invalid choice: {answer}[/warning]")
 
 
-def _print_candidate(index: int, meta: Metadata) -> None:
-    tracks_str = f"{meta.track_count} track(s)" if meta.tracks else "no tracks"
+def _print_candidate_preview(
+    idx: int, total: int, meta: Metadata, disc_info=None
+) -> None:
+    track_lengths: dict[int, int] = disc_info.track_lengths if disc_info else {}
     year_str = f" ({meta.year})" if meta.year else ""
     console.print(
-        f"  [bold cyan]{index}.[/bold cyan] "
-        f"[bold]{meta.album_artist or '(unknown artist)'}[/bold] — "
-        f"{meta.album or '(untitled)'}{year_str}  "
-        f"[dim]{tracks_str} · {meta.source}[/dim]"
+        f"\n[bold]Metadata option {idx + 1}/{total}[/bold]  "
+        f"[dim][{meta.source}][/dim]"
     )
+    console.print(f"Artist: [bold]{meta.album_artist or '(unknown artist)'}[/bold]")
+    console.print(f"Album:  [bold]{meta.album or '(untitled)'}[/bold]{year_str}")
+
+    if meta.tracks:
+        console.print("Tracklist:")
+        for t in meta.tracks:
+            secs = track_lengths.get(t.number, 0)
+            length_str = f"{secs // 60}:{secs % 60:02d}" if secs else ""
+            length_part = f" [{length_str}]" if length_str else ""
+            if t.artist and t.artist != meta.album_artist:
+                console.print(
+                    f"  [dim]{t.number:02d}.[/dim] {t.title} "
+                    f"[dim]({t.artist}){length_part}[/dim]"
+                )
+            else:
+                console.print(
+                    f"  [dim]{t.number:02d}.[/dim] {t.title}"
+                    f"[dim]{length_part}[/dim]"
+                )
+    else:
+        console.print("  [dim](track titles not available)[/dim]")
+
+
+def _print_candidate_list(candidates: list[Metadata]) -> None:
+    console.print("\n[bold]Available metadata options:[/bold]")
+    for i, m in enumerate(candidates, 1):
+        year_part = f" ({m.year})" if m.year else ""
+        tracks_str = f"{m.track_count} tracks" if m.tracks else "no tracks"
+        console.print(
+            f"  [bold cyan]{i:2d}.[/bold cyan] "
+            f"[dim][{m.source}][/dim] "
+            f"[bold]{m.album_artist or '(unknown)'}[/bold] — "
+            f"{m.album or '(untitled)'}{year_part}  "
+            f"[dim]{tracks_str}[/dim]"
+        )
 
 
 # ---------------------------------------------------------------------------
-# Textual TUI (Phase 2)
+# Textual TUI
 # ---------------------------------------------------------------------------
 
 def _tui_select(candidates: list[Metadata]) -> Metadata | None:

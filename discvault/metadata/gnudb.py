@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import socket
 import requests
-
 from .types import DiscInfo, Metadata, Track
 from .sanitize import trim, is_gnudb_compat_warning
 
@@ -22,6 +21,7 @@ def lookup_http(
     disc_info: DiscInfo,
     hello_values: list[str],
     timeout: int = 15,
+    cache_enabled: bool = False,
     debug: bool = False,
 ) -> list[Metadata]:
     """Query GnuDB via HTTP CGI. Returns list of Metadata candidates."""
@@ -30,9 +30,17 @@ def lookup_http(
     results: list[Metadata] = []
     for url in _HTTP_URLS:
         for hello in hello_values:
-            meta = _http_query_and_read(disc_info, hello, url, timeout, debug)
+            meta = _http_query_and_read(
+                disc_info,
+                hello,
+                url,
+                timeout,
+                cache_enabled,
+                debug,
+            )
             if meta and meta not in results:
                 results.append(meta)
+                return results  # one result per source is enough
     return results
 
 
@@ -42,6 +50,7 @@ def lookup_cddbp(
     host: str,
     port: int,
     timeout: int = 15,
+    cache_enabled: bool = False,
     debug: bool = False,
 ) -> list[Metadata]:
     """Query GnuDB via CDDBP TCP protocol."""
@@ -49,9 +58,18 @@ def lookup_cddbp(
         return []
     results: list[Metadata] = []
     for hello in hello_values:
-        meta = _cddbp_query_and_read(disc_info, hello, host, port, timeout, debug)
+        meta = _cddbp_query_and_read(
+            disc_info,
+            hello,
+            host,
+            port,
+            timeout,
+            cache_enabled,
+            debug,
+        )
         if meta and meta not in results:
             results.append(meta)
+            return results  # one result per source is enough
     return results
 
 
@@ -64,6 +82,7 @@ def _http_query_and_read(
     hello: str,
     base_url: str,
     timeout: int,
+    cache_enabled: bool,
     debug: bool,
 ) -> Metadata | None:
     cmd = (
@@ -121,7 +140,11 @@ def _http_query_and_read(
     if not first or first[0] not in ("210", "215"):
         return None
 
-    return parse_cddb_record("\n".join(lines[1:]), source="GnuDB")
+    record_text = "\n".join(lines[1:])
+    meta = parse_cddb_record(record_text, source="GnuDB")
+    if meta and cache_enabled:
+        _save_cache_record(disc_id, category, record_text, debug)
+    return meta
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +157,7 @@ def _cddbp_query_and_read(
     host: str,
     port: int,
     timeout: int,
+    cache_enabled: bool,
     debug: bool,
 ) -> Metadata | None:
     cmd_query = (
@@ -204,7 +228,20 @@ def _cddbp_query_and_read(
     if status_idx is None:
         return None
     record_text = "\n".join(all_lines[status_idx + 1 :])
-    return parse_cddb_record(record_text, source="GnuDB-CDDBP")
+    meta = parse_cddb_record(record_text, source="GnuDB-CDDBP")
+    if meta and cache_enabled:
+        _save_cache_record(disc_id, category, record_text, debug)
+    return meta
+
+
+def _save_cache_record(disc_id: str, category: str, record_text: str, debug: bool) -> None:
+    from . import local
+
+    try:
+        local.save(disc_id, category, record_text)
+    except OSError as exc:
+        if debug:
+            print(f"[metadata-debug] Local CDDB cache save failed ({category}/{disc_id}): {exc}")
 
 
 def _cddbp_exchange(host: str, port: int, commands: list[str], timeout: float) -> str:

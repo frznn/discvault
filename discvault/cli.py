@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import argparse
-import shutil
+import datetime
 import signal
 import subprocess
 import sys
 from pathlib import Path
 
 from .cleanup import Cleanup
-from .config import Config
+from .config import Config, first_run_setup
 from .ui.console import console, log, success, warn, error, step
 
 
@@ -20,6 +20,10 @@ from .ui.console import console, log, success, warn, error, step
 def main() -> None:
     args = _parse_args()
     cfg = Config.load()
+
+    # First-run wizard (only if interactive and no config file yet)
+    if not args.dry_run:
+        first_run_setup(cfg)
 
     # CLI overrides
     if args.base_dir:
@@ -32,15 +36,53 @@ def main() -> None:
         cfg.keep_wav = True
     if args.eject:
         cfg.eject_after = True
+    if args.metadata_timeout:
+        cfg.metadata_timeout = args.metadata_timeout
 
-    _run(args, cfg)
+    # Use TUI by default when running interactively, unless --cli is given.
+    use_tui = not args.cli and sys.stdin.isatty() and _textual_available()
+    if use_tui:
+        _run_tui(args, cfg)
+    else:
+        # Always show where files will go
+        log(f"Library: {cfg.base_dir}")
+        _run(args, cfg)
+
+
+def _textual_available() -> bool:
+    try:
+        import textual  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _run_tui(args: argparse.Namespace, cfg: Config) -> None:
+    import asyncio
+    import os as _os
+    try:
+        from .ui.tui import DiscvaultApp
+    except ImportError:
+        error("Textual is not installed. Run: pip install discvault[tui]")
+        sys.exit(1)
+    app = DiscvaultApp(args, cfg)
+    # Use run_async() with a plain event loop instead of asyncio.run().
+    # asyncio.run() calls shutdown_default_executor() which blocks up to
+    # 5 minutes waiting for network/IO threads to finish.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(app.run_async())
+    finally:
+        loop.close()
+    # Textual has restored the terminal. Hard-exit to kill lingering threads.
+    _os._exit(0)
 
 
 def _run(args: argparse.Namespace, cfg: Config) -> None:
     from . import device as dev_mod
     from . import disc as disc_mod
     from . import library
-    from .metadata.sanitize import sanitize_component
     from . import rip as rip_mod
     from . import encode as enc_mod
     from .metadata import lookup as meta_lookup
@@ -56,6 +98,11 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     signal.signal(signal.SIGINT, _abort)
     signal.signal(signal.SIGTERM, _abort)
 
+    do_image = not args.no_image
+    do_flac = not args.no_flac
+    do_mp3 = not args.no_mp3
+    do_ogg = args.ogg
+
     # ------------------------------------------------------------------
     # 1. Device
     # ------------------------------------------------------------------
@@ -64,7 +111,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     if not device:
         error("No CD device found. Use --device to specify one.")
         sys.exit(1)
-    if not dev_mod.is_readable(device):
+    if not args.dry_run and not dev_mod.is_readable(device):
         error(f"Device {device} is not readable or has no disc.")
         sys.exit(1)
     log(f"Using device: {device}")
@@ -76,76 +123,173 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     try:
         disc_info = disc_mod.load_disc_info(device)
     except Exception as exc:
-        error(f"Failed to read disc info: {exc}")
-        sys.exit(1)
+        if args.dry_run:
+            log("Dry-run: disc read skipped.")
+            from .metadata.types import DiscInfo
+            disc_info = DiscInfo(device=device)
+        else:
+            error(f"Failed to read disc info: {exc}")
+            sys.exit(1)
     disc_info.device = device
-    log(f"Tracks: {disc_info.track_count}  |  FreeDB ID: {disc_info.freedb_disc_id or '(none)'}  |  MB ID: {disc_info.mb_disc_id or '(none)'}")
+    log(
+        f"Tracks: {disc_info.track_count}  |  "
+        f"FreeDB ID: {disc_info.freedb_disc_id or '(none)'}  |  "
+        f"MB ID: {disc_info.mb_disc_id or '(none)'}"
+    )
 
     # ------------------------------------------------------------------
     # 3. Metadata
     # ------------------------------------------------------------------
     step("Fetching metadata")
-    candidates = meta_lookup.fetch_candidates(disc_info, cfg, debug=args.debug)
+    meta_debug = args.metadata_debug or args.debug
+    candidates = meta_lookup.fetch_candidates(disc_info, cfg, debug=meta_debug)
 
     if not candidates:
-        warn("No metadata found.")
+        warn("No metadata found from any source.")
 
+    # ------------------------------------------------------------------
+    # 4. Selection + confirm loop
+    # ------------------------------------------------------------------
+    back_to_meta = True
     meta = None
-    if candidates and sys.stdin.isatty():
-        meta = select_candidate(candidates, tui=args.tui)
-    elif candidates:
-        meta = candidates[0]
-        log(f"Auto-selected: {meta.album_artist} — {meta.album}")
+    artist = args.artist or ""
+    album = args.album or ""
+    year = args.year or ""
 
-    if meta is None:
-        if args.skip_metadata:
-            warn("Proceeding without metadata.")
+    while back_to_meta:
+        back_to_meta = False
+
+        # --- 4a. Pick a metadata candidate ---
+        if candidates and sys.stdin.isatty():
+            meta = select_candidate(candidates, disc_info=disc_info, tui=args.tui)
+        elif candidates:
+            meta = candidates[0]
+            log(f"Auto-selected: {meta.album_artist} — {meta.album}")
+
+        if meta is None:
+            if not sys.stdin.isatty():
+                if args.skip_metadata:
+                    warn("Proceeding without metadata.")
+                else:
+                    warn("No metadata selected. Use --skip-metadata to proceed without it.")
+                    sys.exit(0)
+            elif not args.skip_metadata and not candidates:
+                if args.strict_manual_fallback:
+                    try:
+                        answer = console.input(
+                            "Metadata lookup failed. Continue with manual entry? [y/N] "
+                        ).strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        answer = "n"
+                    if answer not in ("y", "yes"):
+                        log("Aborted.")
+                        sys.exit(0)
+                else:
+                    warn("No metadata found. Continuing with manual values.")
+                    warn("Tip: run with --metadata-debug to see provider-level failures.")
+
+        # --- 4b. Merge values from meta ---
+        if meta:
+            if not artist:
+                artist = meta.album_artist or ""
+            if not album:
+                album = meta.album or ""
+            if not year:
+                year = meta.year or ""
+
+        # Prompt for missing required values
+        if sys.stdin.isatty():
+            if not artist:
+                try:
+                    artist = console.input("Artist: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    sys.exit(0)
+            if not album:
+                try:
+                    album = console.input("Album: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    sys.exit(0)
         else:
-            warn("No metadata selected. Use --skip-metadata to proceed without it.")
-            sys.exit(0)
+            if not artist:
+                error("Artist not provided. Use --artist or ensure metadata is available.")
+                sys.exit(1)
+            if not album:
+                error("Album not provided. Use --album or ensure metadata is available.")
+                sys.exit(1)
+
+        artist = artist.strip()
+        album = album.strip()
+        year = year.strip()
+
+        if year and not year.isdigit():
+            warn(f"Year '{year}' doesn't look like a 4-digit year; clearing it.")
+            year = ""
+
+        # --- 4c. Confirm before starting ---
+        if sys.stdin.isatty() and not args.dry_run:
+            while True:
+                album_root = library.album_root(cfg.base_dir, artist, album, year)
+                action, do_image, do_flac, do_mp3, do_ogg = _confirm_before_start(
+                    artist, album, year,
+                    meta.source if meta else "Manual",
+                    album_root,
+                    do_image, do_flac, do_mp3, do_ogg,
+                    args.flac_compression, args.mp3_bitrate,
+                )
+                if action == "proceed":
+                    break
+                elif action == "edit":
+                    artist, album, year = _edit_tags(artist, album, year)
+                    if meta:
+                        meta.album_artist = artist
+                        meta.album = album
+                        meta.year = year
+                elif action == "back":
+                    back_to_meta = True
+                    artist = args.artist or ""
+                    album = args.album or ""
+                    year = args.year or ""
+                    break
+        else:
+            album_root = library.album_root(cfg.base_dir, artist, album, year)
+            if album_root.exists():
+                warn(f"Album folder already exists (may be overwritten): {album_root}")
 
     # ------------------------------------------------------------------
-    # 4. Paths
+    # 5. Paths
     # ------------------------------------------------------------------
-    artist = meta.album_artist if meta else "Unknown Artist"
-    album = meta.album if meta else "Unknown Album"
-    year = meta.year if meta else ""
-
     album_root = library.album_root(cfg.base_dir, artist, album, year)
+    img_dir = library.image_dir(album_root)
+    fl_dir = library.flac_dir(album_root)
+    mp_dir = library.mp3_dir(album_root)
+    og_dir = library.ogg_dir(album_root)
+
     log(f"Album folder: {album_root}")
 
-    if album_root.exists():
-        if sys.stdin.isatty():
-            warn(f"Album folder already exists — files may be overwritten:")
-            console.print(f"  {album_root}")
-            try:
-                answer = console.input("  Continue? [y/N] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                answer = "n"
-            if answer not in ("y", "yes"):
-                log("Aborted.")
-                sys.exit(0)
-        else:
-            warn(f"Album folder already exists (may be overwritten): {album_root}")
+    if args.dry_run:
+        _dry_run_summary(args, cfg, device, artist, album, year,
+                         meta, album_root, img_dir, fl_dir, mp_dir, og_dir,
+                         do_image, do_flac, do_mp3, do_ogg)
+        return
 
     # ------------------------------------------------------------------
-    # 5. Work directory
+    # 6. Work directory
     # ------------------------------------------------------------------
     work_dir = Path(cfg.work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     cleanup.track_dir(work_dir)
 
     # ------------------------------------------------------------------
-    # 6. Disc image (optional)
+    # 7. Disc image
     # ------------------------------------------------------------------
-    if args.image:
+    toc_path = bin_path = None
+    if do_image:
         step("Creating disc image")
         stem = library.image_stem(artist, album, year)
-        image_dir = Path(cfg.base_dir) / sanitize_component(artist)
-        image_dir.mkdir(parents=True, exist_ok=True)
-        stem = library.unique_image_stem(image_dir, stem)
-        toc_path = image_dir / f"{stem}.toc"
-        bin_path = image_dir / f"{stem}.bin"
+        img_dir.mkdir(parents=True, exist_ok=True)
+        stem = library.unique_image_stem(img_dir, stem)
+        toc_path = img_dir / f"{stem}.toc"
+        bin_path = img_dir / f"{stem}.bin"
 
         ok = rip_mod.rip_image(
             device, toc_path, bin_path, cleanup,
@@ -156,7 +300,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
             sys.exit(1)
 
     # ------------------------------------------------------------------
-    # 7. Rip audio
+    # 8. Rip audio
     # ------------------------------------------------------------------
     step("Ripping audio tracks")
     wav_files = rip_mod.rip_audio(
@@ -167,28 +311,31 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         sys.exit(1)
 
     # ------------------------------------------------------------------
-    # 8. Encode
+    # 9. Build Metadata object for encoding
     # ------------------------------------------------------------------
     if not meta:
-        warn("No metadata — files will have minimal tags.")
-        from .metadata.types import Metadata
-        meta = Metadata(source="none", album_artist=artist, album=album, year=year)
+        from .metadata.types import Metadata as MetaType
+        meta = MetaType(source="Manual", album_artist=artist, album=album, year=year)
+    else:
+        meta.album_artist = artist
+        meta.album = album
+        meta.year = year
 
-    flac = not args.no_flac
-    mp3 = args.mp3
-
-    if flac or mp3:
+    # ------------------------------------------------------------------
+    # 10. Encode
+    # ------------------------------------------------------------------
+    if do_flac or do_mp3 or do_ogg:
         step("Encoding")
-        album_root.mkdir(parents=True, exist_ok=True)
         cleanup.track_dir(album_root)
 
         ok = enc_mod.encode_tracks(
             wav_files,
-            album_root,
             meta,
-            flac=flac,
-            mp3=mp3,
+            flac_dir=fl_dir if do_flac else None,
+            mp3_dir=mp_dir if do_mp3 else None,
+            ogg_dir=og_dir if do_ogg else None,
             flac_compression=args.flac_compression,
+            flac_verify=not args.no_verify,
             mp3_quality=args.mp3_quality,
             mp3_bitrate=args.mp3_bitrate,
             cleanup=cleanup,
@@ -198,10 +345,19 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
             cleanup.remove_all()
             sys.exit(1)
     else:
-        warn("Both FLAC and MP3 disabled — nothing encoded.")
+        warn("FLAC, MP3, and OGG all disabled — nothing encoded.")
 
     # ------------------------------------------------------------------
-    # 9. Cleanup WAVs
+    # 11. backup-info.txt
+    # ------------------------------------------------------------------
+    _write_backup_info(
+        album_root, device, artist, album, year, meta.source,
+        wav_files, toc_path, bin_path,
+        do_image, do_flac, do_mp3, do_ogg, args, cfg, cleanup,
+    )
+
+    # ------------------------------------------------------------------
+    # 12. Cleanup WAVs
     # ------------------------------------------------------------------
     if not cfg.keep_wav:
         for w in wav_files:
@@ -212,7 +368,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
             pass
 
     # ------------------------------------------------------------------
-    # 10. Eject
+    # 13. Eject
     # ------------------------------------------------------------------
     if cfg.eject_after:
         subprocess.run(["eject", device], capture_output=True)
@@ -222,13 +378,177 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Confirm / edit helpers
+# ---------------------------------------------------------------------------
+
+def _confirm_before_start(
+    artist: str,
+    album: str,
+    year: str,
+    meta_source: str,
+    album_root: Path,
+    do_image: bool,
+    do_flac: bool,
+    do_mp3: bool,
+    do_ogg: bool,
+    flac_compression: int,
+    mp3_bitrate: int,
+) -> tuple[str, bool, bool, bool, bool]:
+    """
+    Show a pre-rip summary with toggleable outputs.
+    Returns (action, do_image, do_flac, do_mp3, do_ogg).
+    action is one of: 'proceed', 'edit', 'back'.
+    """
+    while True:
+        def _check(val: bool) -> str:
+            return "[bold green]x[/bold green]" if val else " "
+
+        console.print("\n[bold]Ready to start backup:[/bold]")
+        console.print(f"  Artist:          {artist}")
+        console.print(f"  Album:           {album}")
+        if year:
+            console.print(f"  Year:            {year}")
+        console.print(f"  Metadata source: {meta_source}")
+        console.print(f"  Target folder:   {album_root}")
+        if album_root.exists():
+            warn("  Warning: this folder already exists — existing files may be overwritten.")
+        console.print("\n  Outputs (1/2/3/4 to toggle):")
+        console.print(f"    [{_check(do_image)}] 1. Disc image  (cdrdao)")
+        console.print(f"    [{_check(do_flac)}] 2. FLAC        (level {flac_compression}, verify)")
+        mp3_desc = f"{mp3_bitrate} kbps CBR" if mp3_bitrate > 0 else "VBR"
+        console.print(f"    [{_check(do_mp3)}] 3. MP3         ({mp3_desc})")
+        console.print(f"    [{_check(do_ogg)}] 4. OGG Vorbis  (q6)")
+
+        try:
+            answer = console.input(
+                "\nProceed? [Y=yes, 1/2/3/4=toggle output, e=edit tags, b=back, q=quit]: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            sys.exit(0)
+
+        if answer in ("", "y", "yes"):
+            if not do_image and not do_flac and not do_mp3 and not do_ogg:
+                warn("Nothing to do — enable at least one output.")
+                continue
+            return "proceed", do_image, do_flac, do_mp3, do_ogg
+        elif answer == "1":
+            do_image = not do_image
+        elif answer == "2":
+            do_flac = not do_flac
+        elif answer == "3":
+            do_mp3 = not do_mp3
+        elif answer == "4":
+            do_ogg = not do_ogg
+        elif answer in ("e", "edit"):
+            return "edit", do_image, do_flac, do_mp3, do_ogg
+        elif answer in ("b", "back"):
+            return "back", do_image, do_flac, do_mp3, do_ogg
+        elif answer in ("q", "quit"):
+            log("Aborted.")
+            sys.exit(0)
+        else:
+            console.print("[warning]Please enter Y, 1, 2, 3, 4, e, b, or q.[/warning]")
+
+
+def _edit_tags(artist: str, album: str, year: str) -> tuple[str, str, str]:
+    console.print("\n[bold]Edit tags[/bold] (press Enter to keep current value):")
+    try:
+        new = console.input(f"  Artist [{artist}]: ").strip()
+        if new:
+            artist = new
+        new = console.input(f"  Album  [{album}]: ").strip()
+        if new:
+            album = new
+        new = console.input(f"  Year   [{year or '(none)'}]: ").strip()
+        if new:
+            year = new
+    except (EOFError, KeyboardInterrupt):
+        pass
+    return artist, album, year
+
+
+# ---------------------------------------------------------------------------
+# Dry-run summary
+# ---------------------------------------------------------------------------
+
+def _dry_run_summary(
+    args, cfg, device, artist, album, year, meta, album_root,
+    img_dir, fl_dir, mp_dir, og_dir, do_image, do_flac, do_mp3, do_ogg,
+) -> None:
+    console.print("\n[bold yellow]Dry-run mode — no disc access or files written.[/bold yellow]")
+    console.print(f"  Device:      {device}")
+    console.print(f"  Artist:      {artist}")
+    console.print(f"  Album:       {album}")
+    if year:
+        console.print(f"  Year:        {year}")
+    console.print(f"  Meta source: {meta.source if meta else 'Manual'}")
+    console.print(f"  Album root:  {album_root}")
+    if do_image:
+        console.print(f"  Image dir:   {img_dir}")
+    if do_flac:
+        console.print(f"  FLAC dir:    {fl_dir}")
+    if do_mp3:
+        console.print(f"  MP3 dir:     {mp_dir}")
+    if do_ogg:
+        console.print(f"  OGG dir:     {og_dir}")
+    console.print(f"  Work dir:    {cfg.work_dir}")
+    console.print("\nDry-run: would rip image → rip audio → encode → write backup-info.txt")
+
+
+# ---------------------------------------------------------------------------
+# backup-info.txt
+# ---------------------------------------------------------------------------
+
+def _write_backup_info(
+    album_root: Path,
+    device: str,
+    artist: str,
+    album: str,
+    year: str,
+    meta_source: str,
+    wav_files: list[Path],
+    toc_path,
+    bin_path,
+    do_image: bool,
+    do_flac: bool,
+    do_mp3: bool,
+    do_ogg: bool,
+    args,
+    cfg,
+    cleanup: Cleanup,
+) -> None:
+    info_path = album_root / "backup-info.txt"
+    cleanup.track_file(info_path)
+    lines = [
+        f"Backup timestamp: {datetime.datetime.now().astimezone().isoformat()}",
+        f"Device: {device}",
+        f"Artist: {artist}",
+        f"Album: {album}",
+    ]
+    if year:
+        lines.append(f"Year: {year}")
+    lines.append(f"Metadata source: {meta_source}")
+    lines.append(f"Track count: {len(wav_files)}")
+    if do_image and toc_path:
+        lines.append(f"Image TOC: {toc_path}")
+        lines.append(f"Image BIN: {bin_path}")
+    lines.append(f"FLAC: {'yes' if do_flac else 'no'}")
+    lines.append(f"MP3: {'yes' if do_mp3 else 'no'}")
+    lines.append(f"OGG: {'yes' if do_ogg else 'no'}")
+    try:
+        info_path.write_text("\n".join(lines) + "\n")
+    except OSError as exc:
+        warn(f"Could not write backup-info.txt: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="discvault",
-        description="Rip and archive CDs to FLAC/MP3 with metadata.",
+        description="Rip and archive CDs to FLAC/MP3 with full disc image.",
     )
 
     p.add_argument("-d", "--device", metavar="DEV",
@@ -238,29 +558,49 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--work-dir", metavar="DIR",
                    help="Temporary work directory (overrides config)")
 
+    # Manual metadata override
+    p.add_argument("--artist", metavar="NAME",
+                   help="Artist name (overrides metadata lookup)")
+    p.add_argument("--album", metavar="NAME",
+                   help="Album name (overrides metadata lookup)")
+    p.add_argument("--year", metavar="YYYY",
+                   help="Album year (overrides metadata lookup)")
+
     # Metadata
     p.add_argument("--skip-metadata", action="store_true",
-                   help="Proceed without metadata")
-    p.add_argument("--tui", action="store_true",
-                   help="Use Textual TUI for metadata selection (requires textual)")
+                   help="Proceed without metadata lookup")
+    p.add_argument("--strict-manual-fallback", action="store_true",
+                   help="Confirm before falling back to manual entry when lookup fails")
+    p.add_argument("--metadata-timeout", type=int, metavar="SEC",
+                   help="Metadata lookup timeout in seconds (overrides config)")
+    p.add_argument("--metadata-debug", action="store_true",
+                   help="Print metadata provider debug output")
+    p.add_argument("--cli", action="store_true",
+                   help="Force plain text CLI (default: TUI when interactive)")
+    # kept for backward compat
+    p.add_argument("--tui", action="store_true", help=argparse.SUPPRESS)
 
-    # Encoding
+    # Encoding (on by default, use --no-X to disable)
     enc = p.add_argument_group("encoding")
     enc.add_argument("--no-flac", action="store_true",
                      help="Skip FLAC encoding")
-    enc.add_argument("--mp3", action="store_true",
-                     help="Also encode MP3")
+    enc.add_argument("--no-mp3", action="store_true",
+                     help="Skip MP3 encoding")
+    enc.add_argument("--ogg", action="store_true",
+                     help="Enable OGG Vorbis encoding (requires oggenc)")
+    enc.add_argument("--no-verify", action="store_true",
+                     help="Skip FLAC --verify (faster but no integrity check)")
     enc.add_argument("--flac-compression", type=int, default=8, metavar="N",
                      help="FLAC compression level 0–8 (default: 8)")
     enc.add_argument("--mp3-quality", type=int, default=2, metavar="N",
-                     help="lame -V quality 0–9 (default: 2, VBR)")
-    enc.add_argument("--mp3-bitrate", type=int, default=0, metavar="KBPS",
-                     help="lame CBR bitrate (0 = use VBR quality)")
+                     help="lame -V quality for VBR 0–9 (used when --mp3-bitrate=0)")
+    enc.add_argument("--mp3-bitrate", type=int, default=320, metavar="KBPS",
+                     help="lame CBR bitrate (default: 320; set 0 for VBR)")
 
-    # Image
+    # Image (on by default)
     img = p.add_argument_group("disc image")
-    img.add_argument("--image", action="store_true",
-                     help="Also rip a full disc image (cdrdao)")
+    img.add_argument("--no-image", action="store_true",
+                     help="Skip full disc image (cdrdao)")
     img.add_argument("--cdrdao-driver", metavar="DRV",
                      help="cdrdao driver override")
 
@@ -269,8 +609,10 @@ def _parse_args() -> argparse.Namespace:
                    help="Keep intermediate WAV files")
     p.add_argument("--eject", action="store_true",
                    help="Eject disc when done")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Show what would be done without accessing the disc")
     p.add_argument("--debug", action="store_true",
-                   help="Print debug information")
+                   help="Print subprocess commands and verbose output")
     p.add_argument("--version", action="version", version="discvault 0.1.0")
 
     return p.parse_args()

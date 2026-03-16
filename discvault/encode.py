@@ -19,37 +19,41 @@ from .ui.console import console, log, error
 
 def encode_tracks(
     wav_files: list[Path],
-    dest_dir: Path,
     meta: Metadata,
-    flac: bool = True,
-    mp3: bool = False,
+    flac_dir: Path | None = None,
+    mp3_dir: Path | None = None,
+    ogg_dir: Path | None = None,
     flac_compression: int = 8,
+    flac_verify: bool = True,
     mp3_quality: int = 2,
-    mp3_bitrate: int = 0,
+    mp3_bitrate: int = 320,
+    ogg_quality: int = 6,
     cleanup: Cleanup | None = None,
     debug: bool = False,
+    progress_callback=None,  # Callable[[int, int], None] | None
 ) -> bool:
     """
-    Encode all WAV tracks to FLAC and/or MP3 in parallel.
+    Encode all WAV tracks to FLAC/MP3/OGG. Pass None to skip a format.
     Returns True if all tracks encoded successfully.
     """
-    if not flac and not mp3:
+    if flac_dir is None and mp3_dir is None and ogg_dir is None:
         return True
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    total = len(wav_files) * (int(flac) + int(mp3))
+    if flac_dir is not None:
+        flac_dir.mkdir(parents=True, exist_ok=True)
+    if mp3_dir is not None:
+        mp3_dir.mkdir(parents=True, exist_ok=True)
+    if ogg_dir is not None:
+        ogg_dir.mkdir(parents=True, exist_ok=True)
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("Encoding...", total=total)
-        failed = False
+    total = len(wav_files) * (
+        int(flac_dir is not None) + int(mp3_dir is not None) + int(ogg_dir is not None)
+    )
+    failed = False
+    completed = 0
 
+    def _run_futures(on_complete):
+        nonlocal failed, completed
         with ThreadPoolExecutor() as pool:
             futures = {}
             for wav in wav_files:
@@ -58,8 +62,8 @@ def encode_tracks(
                 track_title = track_meta.title if track_meta else ""
                 track_artist = track_meta.artist if track_meta else ""
 
-                if flac:
-                    out = dest_dir / track_filename(
+                if flac_dir is not None:
+                    out = flac_dir / track_filename(
                         track_num, len(wav_files), track_title, "flac"
                     )
                     if cleanup:
@@ -67,12 +71,12 @@ def encode_tracks(
                     f = pool.submit(
                         _encode_flac,
                         wav, out, meta, track_num, len(wav_files),
-                        track_title, track_artist, flac_compression, debug,
+                        track_title, track_artist, flac_compression, flac_verify, debug,
                     )
                     futures[f] = out.name
 
-                if mp3:
-                    out = dest_dir / track_filename(
+                if mp3_dir is not None:
+                    out = mp3_dir / track_filename(
                         track_num, len(wav_files), track_title, "mp3"
                     )
                     if cleanup:
@@ -81,6 +85,19 @@ def encode_tracks(
                         _encode_mp3,
                         wav, out, meta, track_num, len(wav_files),
                         track_title, track_artist, mp3_quality, mp3_bitrate, debug,
+                    )
+                    futures[f] = out.name
+
+                if ogg_dir is not None:
+                    out = ogg_dir / track_filename(
+                        track_num, len(wav_files), track_title, "ogg"
+                    )
+                    if cleanup:
+                        cleanup.track_file(out)
+                    f = pool.submit(
+                        _encode_ogg,
+                        wav, out, meta, track_num, len(wav_files),
+                        track_title, track_artist, ogg_quality, debug,
                     )
                     futures[f] = out.name
 
@@ -94,7 +111,24 @@ def encode_tracks(
                 if not ok:
                     failed = True
                     error(f"Encoding failed: {name}")
-                progress.advance(task)
+                completed += 1
+                on_complete(completed, total)
+
+    if progress_callback is not None:
+        # TUI/callback mode: no rich Progress
+        _run_futures(progress_callback)
+    else:
+        # CLI mode: rich Progress
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Encoding...", total=total)
+            _run_futures(lambda done, tot: progress.advance(task))
 
     return not failed
 
@@ -119,12 +153,14 @@ def _encode_flac(
     track_title: str,
     track_artist: str,
     compression: int,
+    verify: bool,
     debug: bool,
 ) -> bool:
     cmd = [
         "flac",
         f"--compression-level-{compression}",
         "--silent",
+        *(["--verify"] if verify else []),
         f"--tag=ALBUMARTIST={meta.album_artist}",
         f"--tag=ARTIST={track_artist or meta.album_artist}",
         f"--tag=ALBUM={meta.album}",
@@ -176,6 +212,40 @@ def _encode_mp3(
         cmd += ["--ty", meta.year]
 
     cmd += [str(wav), str(out)]
+
+    if debug:
+        console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 and debug:
+        console.print(f"[dim]{result.stderr}[/dim]")
+    return result.returncode == 0
+
+
+def _encode_ogg(
+    wav: Path,
+    out: Path,
+    meta: Metadata,
+    track_num: int,
+    track_total: int,
+    track_title: str,
+    track_artist: str,
+    quality: int,
+    debug: bool,
+) -> bool:
+    artist = track_artist or meta.album_artist
+    cmd = [
+        "oggenc", "--quiet",
+        "-q", str(quality),
+        "--artist", artist,
+        "--album", meta.album,
+        "--title", track_title,
+        "--tracknum", f"{track_num}/{track_total}",
+        "--comment", f"ALBUMARTIST={meta.album_artist}",
+    ]
+    if meta.year:
+        cmd += ["--date", meta.year]
+    cmd += ["-o", str(out), str(wav)]
 
     if debug:
         console.print(f"[dim]$ {' '.join(cmd)}[/dim]")

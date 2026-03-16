@@ -24,6 +24,10 @@ def load_disc_info(device: str) -> DiscInfo:
         _try_cd_discid_mb(device, info)
     if not info.track_offsets and shutil.which("cd-discid"):
         _try_cd_discid(device, info)
+    # Ensure freedb_disc_id is populated even when track_offsets came from
+    # cd-discid --musicbrainz (which doesn't set the freedb ID).
+    if not info.freedb_disc_id and shutil.which("cd-discid"):
+        _try_cd_discid(device, info)
 
     return info
 
@@ -105,13 +109,15 @@ def _try_cd_discid(device: str, info: DiscInfo) -> None:
             if track_count > 0 and len(parts) >= 3 + track_count:
                 offsets = [int(p) for p in parts[2:2 + track_count]]
                 total_sec = int(parts[2 + track_count])
-                # Reconstruct approximate leadout
-                leadout = offsets[0] + total_sec * 75 if offsets else 0
                 info.freedb_disc_id = freedb_id
-                info.track_count = track_count
-                info.track_offsets = offsets
-                info.leadout = leadout
-                _build_mb_toc(info)
+                # Only set geometry if not already populated (may come from a
+                # more precise source like cd-discid --musicbrainz).
+                if not info.track_offsets:
+                    leadout = offsets[0] + total_sec * 75 if offsets else 0
+                    info.track_count = track_count
+                    info.track_offsets = offsets
+                    info.leadout = leadout
+                    _build_mb_toc(info)
     except Exception:
         pass
 
