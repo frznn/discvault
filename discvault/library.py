@@ -22,12 +22,18 @@ def image_stem(artist: str, album: str, year: str) -> str:
 
 
 def unique_image_stem(image_dir: Path, stem: str) -> str:
-    """Append -2, -3, ... suffix until neither .toc nor .bin exists."""
-    if not (image_dir / f"{stem}.toc").exists() and not (image_dir / f"{stem}.bin").exists():
+    """Append -2, -3, ... suffix until no image-sidecar path exists."""
+    def _taken(name: str) -> bool:
+        return any(
+            (image_dir / f"{name}.{ext}").exists()
+            for ext in ("toc", "cue", "bin", "iso")
+        )
+
+    if not _taken(stem):
         return stem
     base = stem
     suffix = 2
-    while (image_dir / f"{stem}.toc").exists() or (image_dir / f"{stem}.bin").exists():
+    while _taken(stem):
         stem = f"{base}-{suffix}"
         suffix += 1
     return stem
@@ -55,6 +61,22 @@ def mp3_dir(album_root: Path) -> Path:
 
 def ogg_dir(album_root: Path) -> Path:
     return album_root / "ogg"
+
+
+def opus_dir(album_root: Path) -> Path:
+    return album_root / "opus"
+
+
+def alac_dir(album_root: Path) -> Path:
+    return album_root / "alac"
+
+
+def aac_dir(album_root: Path) -> Path:
+    return album_root / "m4a"
+
+
+def wav_dir(album_root: Path) -> Path:
+    return album_root / "wav"
 
 
 def prune_empty_dirs(start: Path, stop_at: Path) -> None:

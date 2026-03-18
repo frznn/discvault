@@ -16,6 +16,11 @@ class Metadata:
     album: str
     year: str = ""
     tracks: list[Track] = field(default_factory=list)
+    cover_art_url: str = ""
+    cover_art_ext: str = ""
+    mb_release_id: str = ""
+    mb_release_group_id: str = ""
+    discogs_release_id: int = 0
 
     def track(self, number: int) -> Track | None:
         for t in self.tracks:
@@ -34,6 +39,7 @@ class DiscInfo:
     track_count: int = 0
     track_offsets: list[int] = field(default_factory=list)  # absolute frame offsets
     leadout: int = 0
+    track_modes: dict[int, str] = field(default_factory=dict)
     freedb_disc_id: str = ""
     mb_disc_id: str = ""
     mb_toc: str = ""  # "1 ntracks leadout off1 off2 ..." for MB TOC lookup
@@ -60,3 +66,17 @@ class DiscInfo:
     @property
     def freedb_offset_string(self) -> str:
         return " ".join(str(o) for o in self.track_offsets)
+
+    def track_mode(self, number: int) -> str:
+        return self.track_modes.get(number, "audio")
+
+    def is_audio_track(self, number: int) -> bool:
+        return self.track_mode(number).lower() == "audio"
+
+    @property
+    def audio_track_numbers(self) -> list[int]:
+        return [number for number in range(1, self.track_count + 1) if self.is_audio_track(number)]
+
+    @property
+    def data_track_numbers(self) -> list[int]:
+        return [number for number in range(1, self.track_count + 1) if not self.is_audio_track(number)]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import datetime
 import signal
 import subprocess
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from .cleanup import Cleanup
 from .config import Config, first_run_setup
+from .tracks import compact_track_list, parse_track_spec, resolve_selected_tracks
 from .ui.console import console, log, success, warn, error, step
 
 
@@ -19,6 +21,12 @@ from .ui.console import console, log, success, warn, error, step
 
 def main() -> None:
     args = _parse_args()
+    if args.tracks:
+        try:
+            parse_track_spec(args.tracks)
+        except ValueError:
+            error("Invalid --tracks value. Use formats like 1-10 or 1,2,4-9.")
+            raise SystemExit(2)
     cfg = Config.load()
 
     # First-run wizard (only if interactive and no config file yet)
@@ -38,6 +46,18 @@ def main() -> None:
         cfg.eject_after = True
     if args.metadata_timeout:
         cfg.metadata_timeout = args.metadata_timeout
+    if args.sample_offset is not None:
+        cfg.cdparanoia_sample_offset = args.sample_offset
+    if args.accuraterip:
+        cfg.accuraterip_enabled = True
+    if args.no_accuraterip:
+        cfg.accuraterip_enabled = False
+    if args.no_cover_art:
+        cfg.download_cover_art = False
+    if args.opus_bitrate:
+        cfg.opus_bitrate = args.opus_bitrate
+    if args.aac_bitrate:
+        cfg.aac_bitrate = args.aac_bitrate
 
     # Use TUI by default when running interactively, unless --cli is given.
     use_tui = not args.cli and sys.stdin.isatty() and _textual_available()
@@ -58,8 +78,6 @@ def _textual_available() -> bool:
 
 
 def _run_tui(args: argparse.Namespace, cfg: Config) -> None:
-    import asyncio
-    import os as _os
     try:
         from .ui.tui import DiscvaultApp
     except ImportError:
@@ -74,17 +92,26 @@ def _run_tui(args: argparse.Namespace, cfg: Config) -> None:
     try:
         loop.run_until_complete(app.run_async())
     finally:
+        pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
-    # Textual has restored the terminal. Hard-exit to kill lingering threads.
-    _os._exit(0)
+        asyncio.set_event_loop(None)
+    raise SystemExit(app.return_code or 0)
 
 
 def _run(args: argparse.Namespace, cfg: Config) -> None:
+    from . import alerts
+    from . import artwork as artwork_mod
     from . import device as dev_mod
     from . import disc as disc_mod
     from . import library
     from . import rip as rip_mod
     from . import encode as enc_mod
+    from . import verify as verify_mod
     from .metadata import lookup as meta_lookup
     from .ui.selector import select_candidate
 
@@ -99,9 +126,22 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     signal.signal(signal.SIGTERM, _abort)
 
     do_image = not args.no_image
+    do_iso = args.iso
     do_flac = not args.no_flac
     do_mp3 = not args.no_mp3
     do_ogg = args.ogg
+    do_opus = args.opus
+    do_alac = args.alac
+    do_aac = args.aac
+    do_wav = args.wav
+    try:
+        requested_tracks = parse_track_spec(args.tracks) if args.tracks else None
+    except ValueError:
+        error("Invalid --tracks value. Use formats like 1-10 or 1,2,4-9.")
+        sys.exit(2)
+    if do_iso and not do_image:
+        warn("ISO export requires the raw disc image. Enabling disc image output.")
+        do_image = True
 
     # ------------------------------------------------------------------
     # 1. Device
@@ -136,13 +176,37 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         f"FreeDB ID: {disc_info.freedb_disc_id or '(none)'}  |  "
         f"MB ID: {disc_info.mb_disc_id or '(none)'}"
     )
+    if disc_info.data_track_numbers:
+        warn(
+            "Data track(s) detected and excluded by default: "
+            f"{compact_track_list(disc_info.data_track_numbers)}"
+        )
+    selected_tracks = resolve_selected_tracks(disc_info, requested_tracks)
+    if not selected_tracks:
+        error("No audio tracks remain selected. Adjust --tracks or choose a disc with audio tracks.")
+        sys.exit(1)
+    if args.tracks:
+        log(f"Selected tracks: {compact_track_list(selected_tracks)}")
+        omitted_tracks = sorted(set(requested_tracks or []) - set(selected_tracks))
+        if omitted_tracks:
+            warn(
+                "Ignored non-audio or out-of-range tracks: "
+                f"{compact_track_list(omitted_tracks)}"
+            )
 
     # ------------------------------------------------------------------
     # 3. Metadata
     # ------------------------------------------------------------------
     step("Fetching metadata")
     meta_debug = args.metadata_debug or args.debug
-    candidates = meta_lookup.fetch_candidates(disc_info, cfg, debug=meta_debug)
+    candidates = meta_lookup.fetch_candidates(
+        disc_info,
+        cfg,
+        debug=meta_debug,
+        metadata_file=args.metadata_file or "",
+        metadata_url=getattr(args, "metadata_url", "") or "",
+        manual_hints=(args.artist or "", args.album or "", args.year or ""),
+    )
 
     if not candidates:
         warn("No metadata found from any source.")
@@ -229,12 +293,12 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         if sys.stdin.isatty() and not args.dry_run:
             while True:
                 album_root = library.album_root(cfg.base_dir, artist, album, year)
-                action, do_image, do_flac, do_mp3, do_ogg = _confirm_before_start(
+                action, do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav = _confirm_before_start(
                     artist, album, year,
                     meta.source if meta else "Manual",
                     album_root,
-                    do_image, do_flac, do_mp3, do_ogg,
-                    args.flac_compression, args.mp3_bitrate,
+                    do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav,
+                    args.flac_compression, args.mp3_bitrate, cfg.opus_bitrate, cfg.aac_bitrate,
                 )
                 if action == "proceed":
                     break
@@ -263,30 +327,39 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     fl_dir = library.flac_dir(album_root)
     mp_dir = library.mp3_dir(album_root)
     og_dir = library.ogg_dir(album_root)
+    op_dir = library.opus_dir(album_root)
+    al_dir = library.alac_dir(album_root)
+    aa_dir = library.aac_dir(album_root)
+    wa_dir = library.wav_dir(album_root)
+    album_root_existed = album_root.exists()
 
     log(f"Album folder: {album_root}")
 
     if args.dry_run:
         _dry_run_summary(args, cfg, device, artist, album, year,
-                         meta, album_root, img_dir, fl_dir, mp_dir, og_dir,
-                         do_image, do_flac, do_mp3, do_ogg)
+                         meta, album_root, img_dir, fl_dir, mp_dir, og_dir, op_dir, al_dir, aa_dir, wa_dir,
+                         do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, selected_tracks)
         return
 
     # ------------------------------------------------------------------
     # 6. Work directory
     # ------------------------------------------------------------------
     work_dir = Path(cfg.work_dir)
+    work_dir_existed = work_dir.exists()
     work_dir.mkdir(parents=True, exist_ok=True)
-    cleanup.track_dir(work_dir)
+    cleanup.track_dir(work_dir, created=not work_dir_existed)
 
     # ------------------------------------------------------------------
     # 7. Disc image
     # ------------------------------------------------------------------
-    toc_path = bin_path = None
+    toc_path = cue_path = bin_path = iso_path = None
     if do_image:
         step("Creating disc image")
         stem = library.image_stem(artist, album, year)
+        cleanup.track_dir(album_root, created=not album_root_existed)
+        img_dir_existed = img_dir.exists()
         img_dir.mkdir(parents=True, exist_ok=True)
+        cleanup.track_dir(img_dir, created=not img_dir_existed)
         stem = library.unique_image_stem(img_dir, stem)
         toc_path = img_dir / f"{stem}.toc"
         bin_path = img_dir / f"{stem}.bin"
@@ -298,17 +371,65 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         if not ok:
             cleanup.remove_all()
             sys.exit(1)
+        cue_path = img_dir / f"{stem}.cue"
+        try:
+            rip_mod.write_cue_file(cue_path, bin_path, disc_info, toc_path=toc_path, cleanup=cleanup)
+            log(f"CUE sidecar saved: {cue_path.name}")
+        except OSError as exc:
+            error(f"Failed to write CUE sidecar: {exc}")
+            cleanup.remove_all()
+            sys.exit(1)
+
+        if do_iso:
+            step("Exporting ISO data image")
+            iso_path = img_dir / f"{stem}.iso"
+            exported_iso, detail = rip_mod.export_iso_from_bin(
+                iso_path,
+                bin_path,
+                disc_info,
+                toc_path=toc_path,
+                cleanup=cleanup,
+            )
+            if exported_iso is not None:
+                iso_path = exported_iso
+                log(f"ISO saved: {iso_path.name}")
+            else:
+                iso_path = None
+                warn(detail)
 
     # ------------------------------------------------------------------
     # 8. Rip audio
     # ------------------------------------------------------------------
-    step("Ripping audio tracks")
-    wav_files = rip_mod.rip_audio(
-        device, work_dir, disc_info.track_count, cleanup, debug=args.debug
-    )
-    if wav_files is None:
-        cleanup.remove_all()
-        sys.exit(1)
+    wav_files: list[Path] = []
+    if do_flac or do_mp3 or do_ogg or do_opus or do_alac or do_aac or do_wav:
+        step("Ripping audio tracks")
+        wav_files = rip_mod.rip_audio(
+            device,
+            work_dir,
+            disc_info.track_count,
+            cleanup,
+            debug=args.debug,
+            selected_tracks=selected_tracks,
+            sample_offset=cfg.cdparanoia_sample_offset,
+        )
+        if wav_files is None:
+            cleanup.remove_all()
+            sys.exit(1)
+
+        if cfg.accuraterip_enabled:
+            step("AccurateRip verification")
+            if cfg.cdparanoia_sample_offset == 0:
+                warn(
+                    "AccurateRip is enabled with sample offset 0. "
+                    "Verification is more meaningful when your drive offset is configured."
+                )
+            verified, detail = verify_mod.verify_accuraterip(wav_files, debug=args.debug)
+            if verified is True:
+                success(detail)
+            elif verified is False:
+                warn(detail)
+            else:
+                warn(detail)
 
     # ------------------------------------------------------------------
     # 9. Build Metadata object for encoding
@@ -324,9 +445,37 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     # ------------------------------------------------------------------
     # 10. Encode
     # ------------------------------------------------------------------
-    if do_flac or do_mp3 or do_ogg:
+    if do_flac or do_mp3 or do_ogg or do_opus or do_alac or do_aac or do_wav:
         step("Encoding")
-        cleanup.track_dir(album_root)
+        cleanup.track_dir(album_root, created=not album_root_existed)
+        if do_flac:
+            fl_dir_existed = fl_dir.exists()
+            fl_dir.mkdir(parents=True, exist_ok=True)
+            cleanup.track_dir(fl_dir, created=not fl_dir_existed)
+        if do_mp3:
+            mp_dir_existed = mp_dir.exists()
+            mp_dir.mkdir(parents=True, exist_ok=True)
+            cleanup.track_dir(mp_dir, created=not mp_dir_existed)
+        if do_ogg:
+            og_dir_existed = og_dir.exists()
+            og_dir.mkdir(parents=True, exist_ok=True)
+            cleanup.track_dir(og_dir, created=not og_dir_existed)
+        if do_opus:
+            op_dir_existed = op_dir.exists()
+            op_dir.mkdir(parents=True, exist_ok=True)
+            cleanup.track_dir(op_dir, created=not op_dir_existed)
+        if do_alac:
+            al_dir_existed = al_dir.exists()
+            al_dir.mkdir(parents=True, exist_ok=True)
+            cleanup.track_dir(al_dir, created=not al_dir_existed)
+        if do_aac:
+            aa_dir_existed = aa_dir.exists()
+            aa_dir.mkdir(parents=True, exist_ok=True)
+            cleanup.track_dir(aa_dir, created=not aa_dir_existed)
+        if do_wav:
+            wa_dir_existed = wa_dir.exists()
+            wa_dir.mkdir(parents=True, exist_ok=True)
+            cleanup.track_dir(wa_dir, created=not wa_dir_existed)
 
         ok = enc_mod.encode_tracks(
             wav_files,
@@ -334,26 +483,51 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
             flac_dir=fl_dir if do_flac else None,
             mp3_dir=mp_dir if do_mp3 else None,
             ogg_dir=og_dir if do_ogg else None,
+            opus_dir=op_dir if do_opus else None,
+            alac_dir=al_dir if do_alac else None,
+            aac_dir=aa_dir if do_aac else None,
+            wav_dir=wa_dir if do_wav else None,
             flac_compression=args.flac_compression,
             flac_verify=not args.no_verify,
             mp3_quality=args.mp3_quality,
             mp3_bitrate=args.mp3_bitrate,
+            opus_bitrate=cfg.opus_bitrate,
+            aac_bitrate=cfg.aac_bitrate,
             cleanup=cleanup,
             debug=args.debug,
+            track_total_hint=max(selected_tracks) if selected_tracks else None,
         )
         if not ok:
             cleanup.remove_all()
             sys.exit(1)
     else:
-        warn("FLAC, MP3, and OGG all disabled — nothing encoded.")
+        log("Audio encoding disabled — disc image only.")
+
+    cover_art_path = None
+    if cfg.download_cover_art:
+        log(f"Cover art: {artwork_mod.describe_cover_art(meta, enabled=True)}")
+        cover_art_path = artwork_mod.download_cover_art(
+            meta,
+            album_root,
+            cleanup=cleanup,
+            timeout=cfg.metadata_timeout,
+            debug=args.debug,
+        )
+        if cover_art_path:
+            log(f"Cover art saved: {cover_art_path.name}")
+        else:
+            warn("Cover art not downloaded.")
 
     # ------------------------------------------------------------------
     # 11. backup-info.txt
     # ------------------------------------------------------------------
     _write_backup_info(
         album_root, device, artist, album, year, meta.source,
-        wav_files, toc_path, bin_path,
-        do_image, do_flac, do_mp3, do_ogg, args, cfg, cleanup,
+        wav_files, toc_path, cue_path, bin_path, iso_path,
+        do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, args, cfg, cleanup,
+        selected_tracks,
+        accuraterip_enabled=cfg.accuraterip_enabled,
+        cover_art_path=cover_art_path,
     )
 
     # ------------------------------------------------------------------
@@ -374,6 +548,15 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         subprocess.run(["eject", device], capture_output=True)
 
     cleanup.clear()
+    sound_ok = alerts.play_completion_sound(cfg.completion_sound)
+    notify_ok = alerts.send_desktop_notification(
+        "DiscVault rip complete",
+        f"{artist} — {album}",
+    )
+    if cfg.completion_sound != "off" and not sound_ok:
+        warn("Completion sound unavailable.")
+    if not notify_ok:
+        warn("Desktop notifications unavailable.")
     success(f"Done! Files saved to: {album_root}")
 
 
@@ -388,15 +571,22 @@ def _confirm_before_start(
     meta_source: str,
     album_root: Path,
     do_image: bool,
+    do_iso: bool,
     do_flac: bool,
     do_mp3: bool,
     do_ogg: bool,
+    do_opus: bool,
+    do_alac: bool,
+    do_aac: bool,
+    do_wav: bool,
     flac_compression: int,
     mp3_bitrate: int,
-) -> tuple[str, bool, bool, bool, bool]:
+    opus_bitrate: int,
+    aac_bitrate: int,
+) -> tuple[str, bool, bool, bool, bool, bool, bool, bool, bool, bool]:
     """
     Show a pre-rip summary with toggleable outputs.
-    Returns (action, do_image, do_flac, do_mp3, do_ogg).
+    Returns (action, do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav).
     action is one of: 'proceed', 'edit', 'back'.
     """
     while True:
@@ -412,42 +602,60 @@ def _confirm_before_start(
         console.print(f"  Target folder:   {album_root}")
         if album_root.exists():
             warn("  Warning: this folder already exists — existing files may be overwritten.")
-        console.print("\n  Outputs (1/2/3/4 to toggle):")
+        console.print("\n  Outputs (1-9 to toggle):")
         console.print(f"    [{_check(do_image)}] 1. Disc image  (cdrdao)")
-        console.print(f"    [{_check(do_flac)}] 2. FLAC        (level {flac_compression}, verify)")
+        console.print(f"    [{_check(do_iso)}] 2. ISO data     (derived when disc has one data track)")
+        console.print(f"    [{_check(do_flac)}] 3. FLAC        (level {flac_compression}, verify)")
         mp3_desc = f"{mp3_bitrate} kbps CBR" if mp3_bitrate > 0 else "VBR"
-        console.print(f"    [{_check(do_mp3)}] 3. MP3         ({mp3_desc})")
-        console.print(f"    [{_check(do_ogg)}] 4. OGG Vorbis  (q6)")
+        console.print(f"    [{_check(do_mp3)}] 4. MP3         ({mp3_desc})")
+        console.print(f"    [{_check(do_ogg)}] 5. OGG Vorbis  (q6)")
+        console.print(f"    [{_check(do_opus)}] 6. Opus        ({opus_bitrate} kbps)")
+        console.print(f"    [{_check(do_alac)}] 7. ALAC        (m4a)")
+        console.print(f"    [{_check(do_aac)}] 8. AAC/M4A     ({aac_bitrate} kbps)")
+        console.print(f"    [{_check(do_wav)}] 9. WAV copy")
 
         try:
             answer = console.input(
-                "\nProceed? [Y=yes, 1/2/3/4=toggle output, e=edit tags, b=back, q=quit]: "
+                "\nProceed? [Y=yes, 1-9=toggle output, e=edit tags, b=back, q=quit]: "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             sys.exit(0)
 
         if answer in ("", "y", "yes"):
-            if not do_image and not do_flac and not do_mp3 and not do_ogg:
+            if do_iso and not do_image:
+                warn("ISO export requires disc image output.")
+                continue
+            if not any((do_image, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav)):
                 warn("Nothing to do — enable at least one output.")
                 continue
-            return "proceed", do_image, do_flac, do_mp3, do_ogg
+            return "proceed", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav
         elif answer == "1":
             do_image = not do_image
         elif answer == "2":
-            do_flac = not do_flac
+            do_iso = not do_iso
         elif answer == "3":
-            do_mp3 = not do_mp3
+            do_flac = not do_flac
         elif answer == "4":
+            do_mp3 = not do_mp3
+        elif answer == "5":
             do_ogg = not do_ogg
+        elif answer == "6":
+            do_opus = not do_opus
+        elif answer == "7":
+            do_alac = not do_alac
+        elif answer == "8":
+            do_aac = not do_aac
+        elif answer == "9":
+            do_wav = not do_wav
         elif answer in ("e", "edit"):
-            return "edit", do_image, do_flac, do_mp3, do_ogg
+            return "edit", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav
         elif answer in ("b", "back"):
-            return "back", do_image, do_flac, do_mp3, do_ogg
+            return "back", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav
         elif answer in ("q", "quit"):
             log("Aborted.")
             sys.exit(0)
         else:
-            console.print("[warning]Please enter Y, 1, 2, 3, 4, e, b, or q.[/warning]")
+            console.print("[warning]Please enter Y, 1-9, e, b, or q.[/warning]")
 
 
 def _edit_tags(artist: str, album: str, year: str) -> tuple[str, str, str]:
@@ -473,7 +681,9 @@ def _edit_tags(artist: str, album: str, year: str) -> tuple[str, str, str]:
 
 def _dry_run_summary(
     args, cfg, device, artist, album, year, meta, album_root,
-    img_dir, fl_dir, mp_dir, og_dir, do_image, do_flac, do_mp3, do_ogg,
+    img_dir, fl_dir, mp_dir, og_dir, op_dir, al_dir, aa_dir, wa_dir,
+    do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav,
+    selected_tracks,
 ) -> None:
     console.print("\n[bold yellow]Dry-run mode — no disc access or files written.[/bold yellow]")
     console.print(f"  Device:      {device}")
@@ -482,17 +692,31 @@ def _dry_run_summary(
     if year:
         console.print(f"  Year:        {year}")
     console.print(f"  Meta source: {meta.source if meta else 'Manual'}")
+    console.print(f"  Tracks:      {compact_track_list(selected_tracks)}")
     console.print(f"  Album root:  {album_root}")
     if do_image:
         console.print(f"  Image dir:   {img_dir}")
+    if do_iso:
+        console.print("  ISO export:  yes (when the disc has a supported data track)")
     if do_flac:
         console.print(f"  FLAC dir:    {fl_dir}")
     if do_mp3:
         console.print(f"  MP3 dir:     {mp_dir}")
     if do_ogg:
         console.print(f"  OGG dir:     {og_dir}")
+    if do_opus:
+        console.print(f"  Opus dir:    {op_dir}")
+    if do_alac:
+        console.print(f"  ALAC dir:    {al_dir}")
+    if do_aac:
+        console.print(f"  AAC dir:     {aa_dir}")
+    if do_wav:
+        console.print(f"  WAV dir:     {wa_dir}")
     console.print(f"  Work dir:    {cfg.work_dir}")
-    console.print("\nDry-run: would rip image → rip audio → encode → write backup-info.txt")
+    console.print(f"  Sample off:  {cfg.cdparanoia_sample_offset}")
+    console.print(f"  AccurateRip: {'yes' if cfg.accuraterip_enabled else 'no'}")
+    console.print(f"  Cover art:   {'yes' if cfg.download_cover_art else 'no'}")
+    console.print("\nDry-run: would execute the selected rip stages and write backup-info.txt")
 
 
 # ---------------------------------------------------------------------------
@@ -508,14 +732,25 @@ def _write_backup_info(
     meta_source: str,
     wav_files: list[Path],
     toc_path,
+    cue_path,
     bin_path,
+    iso_path,
     do_image: bool,
+    do_iso: bool,
     do_flac: bool,
     do_mp3: bool,
     do_ogg: bool,
+    do_opus: bool,
+    do_alac: bool,
+    do_aac: bool,
+    do_wav: bool,
     args,
     cfg,
     cleanup: Cleanup,
+    selected_tracks: list[int],
+    *,
+    accuraterip_enabled: bool,
+    cover_art_path: Path | None,
 ) -> None:
     info_path = album_root / "backup-info.txt"
     cleanup.track_file(info_path)
@@ -528,13 +763,27 @@ def _write_backup_info(
     if year:
         lines.append(f"Year: {year}")
     lines.append(f"Metadata source: {meta_source}")
-    lines.append(f"Track count: {len(wav_files)}")
+    lines.append(f"Track count: {len(wav_files) or len(selected_tracks)}")
+    lines.append(f"Selected tracks: {compact_track_list(selected_tracks)}")
     if do_image and toc_path:
         lines.append(f"Image TOC: {toc_path}")
+        lines.append(f"Image CUE: {cue_path}")
         lines.append(f"Image BIN: {bin_path}")
+    lines.append(f"ISO export: {'yes' if do_iso else 'no'}")
+    if iso_path is not None:
+        lines.append(f"Image ISO: {iso_path}")
     lines.append(f"FLAC: {'yes' if do_flac else 'no'}")
     lines.append(f"MP3: {'yes' if do_mp3 else 'no'}")
     lines.append(f"OGG: {'yes' if do_ogg else 'no'}")
+    lines.append(f"Opus: {'yes' if do_opus else 'no'}")
+    lines.append(f"ALAC: {'yes' if do_alac else 'no'}")
+    lines.append(f"AAC/M4A: {'yes' if do_aac else 'no'}")
+    lines.append(f"WAV copy: {'yes' if do_wav else 'no'}")
+    lines.append(f"AccurateRip: {'yes' if accuraterip_enabled else 'no'}")
+    lines.append(f"Sample offset: {cfg.cdparanoia_sample_offset}")
+    lines.append(f"Cover art enabled: {'yes' if cfg.download_cover_art else 'no'}")
+    if cover_art_path is not None:
+        lines.append(f"Cover art: {cover_art_path}")
     try:
         info_path.write_text("\n".join(lines) + "\n")
     except OSError as exc:
@@ -557,6 +806,12 @@ def _parse_args() -> argparse.Namespace:
                    help="Library base directory (overrides config)")
     p.add_argument("--work-dir", metavar="DIR",
                    help="Temporary work directory (overrides config)")
+    p.add_argument("--tracks", metavar="SPEC",
+                   help="Track selection, e.g. 1-10 or 1,2,4-9")
+    p.add_argument("--metadata-file", metavar="FILE",
+                   help="Import metadata from a .cue, .toc, .json, or .toml file")
+    p.add_argument("--metadata-url", "--bandcamp-url", dest="metadata_url", metavar="URL",
+                   help="Import metadata from a supported page URL (currently Bandcamp albums)")
 
     # Manual metadata override
     p.add_argument("--artist", metavar="NAME",
@@ -588,6 +843,14 @@ def _parse_args() -> argparse.Namespace:
                      help="Skip MP3 encoding")
     enc.add_argument("--ogg", action="store_true",
                      help="Enable OGG Vorbis encoding (requires oggenc)")
+    enc.add_argument("--opus", action="store_true",
+                     help="Enable Opus encoding (requires opusenc)")
+    enc.add_argument("--alac", action="store_true",
+                     help="Enable ALAC encoding (requires ffmpeg)")
+    enc.add_argument("--aac", action="store_true",
+                     help="Enable AAC/M4A encoding (requires ffmpeg)")
+    enc.add_argument("--wav", action="store_true",
+                     help="Save final WAV copies in the library")
     enc.add_argument("--no-verify", action="store_true",
                      help="Skip FLAC --verify (faster but no integrity check)")
     enc.add_argument("--flac-compression", type=int, default=8, metavar="N",
@@ -596,13 +859,30 @@ def _parse_args() -> argparse.Namespace:
                      help="lame -V quality for VBR 0–9 (used when --mp3-bitrate=0)")
     enc.add_argument("--mp3-bitrate", type=int, default=320, metavar="KBPS",
                      help="lame CBR bitrate (default: 320; set 0 for VBR)")
+    enc.add_argument("--opus-bitrate", type=int, metavar="KBPS",
+                     help="Opus bitrate in kbps (default: config value)")
+    enc.add_argument("--aac-bitrate", type=int, metavar="KBPS",
+                     help="AAC bitrate in kbps (default: config value)")
 
     # Image (on by default)
     img = p.add_argument_group("disc image")
     img.add_argument("--no-image", action="store_true",
                      help="Skip full disc image (cdrdao)")
+    img.add_argument("--iso", action="store_true",
+                     help="Also export an ISO when the disc has a supported data track")
     img.add_argument("--cdrdao-driver", metavar="DRV",
                      help="cdrdao driver override")
+    img.add_argument("--sample-offset", type=int, metavar="SAMPLES",
+                     help="cdparanoia sample offset correction (overrides config)")
+
+    verify_group = p.add_argument_group("verification")
+    verify_toggle = verify_group.add_mutually_exclusive_group()
+    verify_toggle.add_argument("--accuraterip", action="store_true",
+                               help="Enable optional AccurateRip verification if a helper is installed")
+    verify_toggle.add_argument("--no-accuraterip", action="store_true",
+                               help="Disable AccurateRip verification even if enabled in config")
+    p.add_argument("--no-cover-art", action="store_true",
+                   help="Disable downloading cover art")
 
     # Misc
     p.add_argument("--keep-wav", action="store_true",
