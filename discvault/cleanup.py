@@ -12,31 +12,39 @@ class Cleanup:
     """
 
     def __init__(self) -> None:
-        self._files: list[Path] = []
-        self._dirs: list[Path] = []
+        self._files: dict[Path, bool] = {}
+        self._dirs: dict[Path, bool] = {}
 
-    def track_file(self, path: str | Path) -> Path:
+    def track_file(self, path: str | Path, *, created: bool | None = None) -> Path:
         p = Path(path)
-        self._files.append(p)
+        if created is None:
+            created = not p.exists()
+        self._files[p] = bool(created)
         return p
 
-    def track_dir(self, path: str | Path) -> Path:
+    def track_dir(self, path: str | Path, *, created: bool | None = None) -> Path:
         p = Path(path)
-        self._dirs.append(p)
+        if created is None:
+            created = not p.exists()
+        self._dirs[p] = bool(created)
         return p
 
     def remove_all(self) -> None:
         """Delete all tracked files and directories."""
-        for f in self._files:
+        for f, created in list(self._files.items()):
             try:
-                if f.exists():
+                if created and f.exists():
                     f.unlink()
             except OSError:
                 pass
         # Remove dirs deepest-first
-        for d in reversed(self._dirs):
+        for d, created in sorted(
+            self._dirs.items(),
+            key=lambda item: len(item[0].parts),
+            reverse=True,
+        ):
             try:
-                if d.exists():
+                if created and d.exists():
                     shutil.rmtree(d)
             except OSError:
                 pass

@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import tempfile
+from pathlib import Path
 
 from .metadata.types import DiscInfo
 
@@ -28,6 +30,10 @@ def load_disc_info(device: str) -> DiscInfo:
     # cd-discid --musicbrainz (which doesn't set the freedb ID).
     if not info.freedb_disc_id and shutil.which("cd-discid"):
         _try_cd_discid(device, info)
+    if shutil.which("cd-info"):
+        _try_cdinfo_track_modes(device, info)
+    elif shutil.which("cdrdao"):
+        _try_cdrdao_track_modes(device, info)
 
     return info
 
@@ -134,3 +140,88 @@ def _build_mb_toc(info: DiscInfo) -> None:
         info.mb_toc = f"1 {info.track_count} {info.leadout} " + " ".join(
             str(o) for o in info.track_offsets
         )
+
+
+_CDINFO_TRACK_MODE_RE = re.compile(r"^\s*track\s+(\d+):\s+(.+)$", re.IGNORECASE)
+
+
+def _try_cdinfo_track_modes(device: str, info: DiscInfo) -> None:
+    try:
+        result = subprocess.run(
+            [
+                "cd-info",
+                "--no-header",
+                "--no-device-info",
+                "--no-disc-mode",
+                "-C",
+                device,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception:
+        return
+
+    if result.returncode != 0:
+        return
+
+    modes: dict[int, str] = {}
+    for line in result.stdout.splitlines():
+        match = _CDINFO_TRACK_MODE_RE.match(line)
+        if not match:
+            continue
+        track_num = int(match.group(1))
+        description = match.group(2).strip().lower()
+        if "audio" in description:
+            modes[track_num] = "audio"
+        elif "mode" in description or "data" in description:
+            modes[track_num] = "data"
+
+    if modes:
+        info.track_modes.update(modes)
+
+
+_CDRDAO_TRACK_MODE_RE = re.compile(r"^\s*TRACK\s+([A-Z0-9_/]+)", re.IGNORECASE)
+
+
+def _try_cdrdao_track_modes(device: str, info: DiscInfo) -> None:
+    with tempfile.TemporaryDirectory(prefix="discvault-track-modes-") as tmpdir:
+        toc_path = Path(tmpdir) / "disc.toc"
+        try:
+            result = subprocess.run(
+                [
+                    "cdrdao",
+                    "read-toc",
+                    "--fast-toc",
+                    "--device",
+                    device,
+                    str(toc_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except Exception:
+            return
+
+        if result.returncode != 0 or not toc_path.exists():
+            return
+
+        current_track = 0
+        modes: dict[int, str] = {}
+        try:
+            toc_text = toc_path.read_text(errors="replace")
+        except OSError:
+            return
+
+        for line in toc_text.splitlines():
+            match = _CDRDAO_TRACK_MODE_RE.match(line)
+            if not match:
+                continue
+            current_track += 1
+            mode = match.group(1).upper()
+            modes[current_track] = "audio" if mode == "AUDIO" else "data"
+
+        if modes:
+            info.track_modes.update(modes)

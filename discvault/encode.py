@@ -1,6 +1,7 @@
 """FLAC and MP3 encoding with parallel per-track execution."""
 from __future__ import annotations
 
+import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -23,32 +24,43 @@ def encode_tracks(
     flac_dir: Path | None = None,
     mp3_dir: Path | None = None,
     ogg_dir: Path | None = None,
+    opus_dir: Path | None = None,
+    alac_dir: Path | None = None,
+    aac_dir: Path | None = None,
+    wav_dir: Path | None = None,
     flac_compression: int = 8,
     flac_verify: bool = True,
     mp3_quality: int = 2,
     mp3_bitrate: int = 320,
     ogg_quality: int = 6,
+    opus_bitrate: int = 160,
+    aac_bitrate: int = 256,
     cleanup: Cleanup | None = None,
     debug: bool = False,
     progress_callback=None,  # Callable[[int, int], None] | None
+    track_total_hint: int | None = None,
 ) -> bool:
     """
-    Encode all WAV tracks to FLAC/MP3/OGG. Pass None to skip a format.
+    Encode or copy all WAV tracks to the requested output formats. Pass None to skip a format.
     Returns True if all tracks encoded successfully.
     """
-    if flac_dir is None and mp3_dir is None and ogg_dir is None:
+    output_dirs = [
+        flac_dir,
+        mp3_dir,
+        ogg_dir,
+        opus_dir,
+        alac_dir,
+        aac_dir,
+        wav_dir,
+    ]
+    if all(path is None for path in output_dirs):
         return True
 
-    if flac_dir is not None:
-        flac_dir.mkdir(parents=True, exist_ok=True)
-    if mp3_dir is not None:
-        mp3_dir.mkdir(parents=True, exist_ok=True)
-    if ogg_dir is not None:
-        ogg_dir.mkdir(parents=True, exist_ok=True)
+    for out_dir in output_dirs:
+        if out_dir is not None:
+            out_dir.mkdir(parents=True, exist_ok=True)
 
-    total = len(wav_files) * (
-        int(flac_dir is not None) + int(mp3_dir is not None) + int(ogg_dir is not None)
-    )
+    total = len(wav_files) * sum(int(path is not None) for path in output_dirs)
     failed = False
     completed = 0
 
@@ -58,47 +70,96 @@ def encode_tracks(
             futures = {}
             for wav in wav_files:
                 track_num = _track_num_from_wav(wav)
+                track_total = max(track_total_hint or len(wav_files), track_num, len(wav_files))
                 track_meta = meta.track(track_num)
                 track_title = track_meta.title if track_meta else ""
                 track_artist = track_meta.artist if track_meta else ""
 
                 if flac_dir is not None:
                     out = flac_dir / track_filename(
-                        track_num, len(wav_files), track_title, "flac"
+                        track_num, track_total, track_title, "flac"
                     )
                     if cleanup:
                         cleanup.track_file(out)
                     f = pool.submit(
                         _encode_flac,
-                        wav, out, meta, track_num, len(wav_files),
+                        wav, out, meta, track_num, track_total,
                         track_title, track_artist, flac_compression, flac_verify, debug,
                     )
                     futures[f] = out.name
 
                 if mp3_dir is not None:
                     out = mp3_dir / track_filename(
-                        track_num, len(wav_files), track_title, "mp3"
+                        track_num, track_total, track_title, "mp3"
                     )
                     if cleanup:
                         cleanup.track_file(out)
                     f = pool.submit(
                         _encode_mp3,
-                        wav, out, meta, track_num, len(wav_files),
+                        wav, out, meta, track_num, track_total,
                         track_title, track_artist, mp3_quality, mp3_bitrate, debug,
                     )
                     futures[f] = out.name
 
                 if ogg_dir is not None:
                     out = ogg_dir / track_filename(
-                        track_num, len(wav_files), track_title, "ogg"
+                        track_num, track_total, track_title, "ogg"
                     )
                     if cleanup:
                         cleanup.track_file(out)
                     f = pool.submit(
                         _encode_ogg,
-                        wav, out, meta, track_num, len(wav_files),
+                        wav, out, meta, track_num, track_total,
                         track_title, track_artist, ogg_quality, debug,
                     )
+                    futures[f] = out.name
+
+                if opus_dir is not None:
+                    out = opus_dir / track_filename(
+                        track_num, track_total, track_title, "opus"
+                    )
+                    if cleanup:
+                        cleanup.track_file(out)
+                    f = pool.submit(
+                        _encode_opus,
+                        wav, out, meta, track_num, track_total,
+                        track_title, track_artist, opus_bitrate, debug,
+                    )
+                    futures[f] = out.name
+
+                if alac_dir is not None:
+                    out = alac_dir / track_filename(
+                        track_num, track_total, track_title, "m4a"
+                    )
+                    if cleanup:
+                        cleanup.track_file(out)
+                    f = pool.submit(
+                        _encode_alac,
+                        wav, out, meta, track_num, track_total,
+                        track_title, track_artist, debug,
+                    )
+                    futures[f] = out.name
+
+                if aac_dir is not None:
+                    out = aac_dir / track_filename(
+                        track_num, track_total, track_title, "m4a"
+                    )
+                    if cleanup:
+                        cleanup.track_file(out)
+                    f = pool.submit(
+                        _encode_aac,
+                        wav, out, meta, track_num, track_total,
+                        track_title, track_artist, aac_bitrate, debug,
+                    )
+                    futures[f] = out.name
+
+                if wav_dir is not None:
+                    out = wav_dir / track_filename(
+                        track_num, track_total, track_title, "wav"
+                    )
+                    if cleanup:
+                        cleanup.track_file(out)
+                    f = pool.submit(_copy_wav, wav, out)
                     futures[f] = out.name
 
             for future in as_completed(futures):
@@ -254,3 +315,153 @@ def _encode_ogg(
     if result.returncode != 0 and debug:
         console.print(f"[dim]{result.stderr}[/dim]")
     return result.returncode == 0
+
+
+def _encode_opus(
+    wav: Path,
+    out: Path,
+    meta: Metadata,
+    track_num: int,
+    track_total: int,
+    track_title: str,
+    track_artist: str,
+    bitrate: int,
+    debug: bool,
+) -> bool:
+    artist = track_artist or meta.album_artist
+    cmd = [
+        "opusenc",
+        "--quiet",
+        "--bitrate",
+        str(bitrate),
+        "--title",
+        track_title,
+        "--artist",
+        artist,
+        "--album",
+        meta.album,
+        "--tracknumber",
+        str(track_num),
+        "--comment",
+        f"TRACKTOTAL={track_total}",
+        "--comment",
+        f"ALBUMARTIST={meta.album_artist}",
+    ]
+    if meta.year:
+        cmd += ["--date", meta.year]
+    cmd += [str(wav), str(out)]
+
+    if debug:
+        console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 and debug:
+        console.print(f"[dim]{result.stderr}[/dim]")
+    return result.returncode == 0
+
+
+def _encode_alac(
+    wav: Path,
+    out: Path,
+    meta: Metadata,
+    track_num: int,
+    track_total: int,
+    track_title: str,
+    track_artist: str,
+    debug: bool,
+) -> bool:
+    return _encode_ffmpeg(
+        wav,
+        out,
+        meta,
+        track_num,
+        track_total,
+        track_title,
+        track_artist,
+        codec="alac",
+        bitrate=0,
+        debug=debug,
+    )
+
+
+def _encode_aac(
+    wav: Path,
+    out: Path,
+    meta: Metadata,
+    track_num: int,
+    track_total: int,
+    track_title: str,
+    track_artist: str,
+    bitrate: int,
+    debug: bool,
+) -> bool:
+    return _encode_ffmpeg(
+        wav,
+        out,
+        meta,
+        track_num,
+        track_total,
+        track_title,
+        track_artist,
+        codec="aac",
+        bitrate=bitrate,
+        debug=debug,
+    )
+
+
+def _encode_ffmpeg(
+    wav: Path,
+    out: Path,
+    meta: Metadata,
+    track_num: int,
+    track_total: int,
+    track_title: str,
+    track_artist: str,
+    *,
+    codec: str,
+    bitrate: int,
+    debug: bool,
+) -> bool:
+    artist = track_artist or meta.album_artist
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-i",
+        str(wav),
+        "-vn",
+        "-c:a",
+        codec,
+        "-metadata",
+        f"album_artist={meta.album_artist}",
+        "-metadata",
+        f"artist={artist}",
+        "-metadata",
+        f"album={meta.album}",
+        "-metadata",
+        f"title={track_title}",
+        "-metadata",
+        f"track={track_num}/{track_total}",
+    ]
+    if bitrate > 0:
+        cmd += ["-b:a", f"{bitrate}k"]
+    if meta.year:
+        cmd += ["-metadata", f"date={meta.year}"]
+    cmd.append(str(out))
+
+    if debug:
+        console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 and debug:
+        console.print(f"[dim]{result.stderr}[/dim]")
+    return result.returncode == 0
+
+
+def _copy_wav(wav: Path, out: Path) -> bool:
+    try:
+        shutil.copy2(wav, out)
+        return True
+    except OSError:
+        return False

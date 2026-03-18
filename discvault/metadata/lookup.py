@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from ..config import Config
+from .sanitize import trim
 from .types import DiscInfo, Metadata
-from . import musicbrainz, gnudb, cdtext, local
+from . import musicbrainz, gnudb, cdtext, local, discogs, fileimport, urlimport
 
 
 def fetch_candidates(
@@ -11,19 +12,29 @@ def fetch_candidates(
     cfg: Config,
     debug: bool = False,
     sources: dict | None = None,
+    metadata_file: str = "",
+    metadata_url: str = "",
+    manual_hints: tuple[str, str, str] | None = None,
 ) -> list[Metadata]:
     """
     Query metadata providers and return a deduplicated list of candidates.
 
-    Order: Local CDDB cache → MusicBrainz → GnuDB HTTP → GnuDB CDDBP → CD-Text
-    sources: dict with boolean keys "musicbrainz", "gnudb", "cdtext".
+    Order: imported file → metadata URL → Local cache → MusicBrainz → GnuDB → CD-Text → Discogs
+    sources: dict with boolean keys "file", "url", "musicbrainz", "gnudb", "cdtext", "discogs".
              Defaults to all enabled.
     """
     if sources is None:
         sources = {}
+    use_file = sources.get("file", bool(metadata_file))
+    use_url = sources.get("url", bool(metadata_url))
     use_mb = sources.get("musicbrainz", True)
     use_gnudb = sources.get("gnudb", True)
     use_cdtext = sources.get("cdtext", True)
+    use_discogs = sources.get("discogs", True)
+    hint_artist = hint_album = hint_year = ""
+    if manual_hints:
+        hint_artist, hint_album, hint_year = (trim(part) for part in manual_hints)
+    has_manual_terms = bool(hint_artist and hint_album)
 
     results: list[Metadata] = []
 
@@ -32,19 +43,51 @@ def fetch_candidates(
             if m not in results:
                 results.append(m)
 
-    # 0. Local CDDB cache
+    # 0. Imported metadata file
+    if use_file and metadata_file:
+        if debug:
+            print(f"[metadata-debug] Importing metadata file: {metadata_file}")
+        _add(fileimport.lookup(metadata_file, debug=debug))
+
+    # 0b. Metadata URL import
+    if use_url and metadata_url:
+        if debug:
+            print(f"[metadata-debug] Importing metadata URL: {metadata_url}")
+        _add(
+            urlimport.lookup_url(
+                metadata_url,
+                disc_info=disc_info,
+                timeout=cfg.metadata_timeout,
+                debug=debug,
+            )
+        )
+
+    # 1. Local CDDB cache
     if cfg.use_local_cddb_cache and disc_info.freedb_disc_id:
         if debug:
             print("[metadata-debug] Checking local CDDB cache...")
         _add(local.lookup(disc_info, debug=debug))
 
-    # 1. MusicBrainz
+    # 2. MusicBrainz
     if use_mb and (disc_info.mb_disc_id or disc_info.mb_toc):
         if debug:
             print("[metadata-debug] Querying MusicBrainz...")
         _add(musicbrainz.lookup(disc_info, timeout=cfg.metadata_timeout, debug=debug))
+    if use_mb and has_manual_terms:
+        if debug:
+            print("[metadata-debug] Searching MusicBrainz by artist/album...")
+        _add(
+            musicbrainz.search_releases(
+                hint_artist,
+                hint_album,
+                year=hint_year,
+                disc_info=disc_info,
+                timeout=cfg.metadata_timeout,
+                debug=debug,
+            )
+        )
 
-    # 2. GnuDB HTTP + CDDBP
+    # 3. GnuDB HTTP + CDDBP
     if use_gnudb and disc_info.freedb_disc_id:
         # Limit to first hello string — trying all variants multiplies requests
         hello_values = gnudb.build_hello_values(
@@ -77,7 +120,7 @@ def fetch_candidates(
                 )
             )
 
-    # 3. CD-Text
+    # 4. CD-Text
     if use_cdtext:
         if debug:
             print("[metadata-debug] Reading CD-Text...")
@@ -85,6 +128,23 @@ def fetch_candidates(
             cdtext.lookup(
                 disc_info,
                 driver=cfg.cdrdao_driver,
+                timeout=cfg.metadata_timeout,
+                debug=debug,
+            )
+        )
+
+    # 5. Discogs, seeded by prior candidates or manual hints
+    if use_discogs:
+        if debug:
+            print("[metadata-debug] Querying Discogs...")
+        _add(
+            discogs.lookup(
+                disc_info,
+                seed_candidates=results,
+                artist=hint_artist,
+                album=hint_album,
+                year=hint_year,
+                token=cfg.discogs.token,
                 timeout=cfg.metadata_timeout,
                 debug=debug,
             )
