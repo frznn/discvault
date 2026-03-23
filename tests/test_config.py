@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import discvault.config as config_mod
 
@@ -65,6 +66,40 @@ class ConfigTests(unittest.TestCase):
                 config_mod.CONFIG_PATH = old
 
         self.assertEqual(cfg.completion_sound, "bell")
+
+    def test_save_uses_temp_file_and_leaves_no_tmp_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config(base_dir="/music")
+                cfg.save()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+            config_exists = config_path.exists()
+            tmp_files = list(Path(tmp).glob(".config.toml.*.tmp"))
+
+        self.assertTrue(config_exists)
+        self.assertEqual(tmp_files, [])
+
+    def test_failed_replace_cleans_up_temp_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config(base_dir="/music")
+                with patch("pathlib.Path.replace", side_effect=OSError("boom")):
+                    with self.assertRaises(OSError):
+                        cfg.save()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+            tmp_files = list(Path(tmp).glob(".config.toml.*.tmp"))
+
+        self.assertEqual(tmp_files, [])
 
 
 if __name__ == "__main__":

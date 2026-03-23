@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -172,7 +173,22 @@ class Config:
             f"token = {_toml_string(self.discogs.token)}",
             "",
         ]
-        CONFIG_PATH.write_text("\n".join(lines))
+        tmp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=CONFIG_PATH.parent,
+                prefix=f".{CONFIG_PATH.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                handle.write("\n".join(lines))
+                tmp_path = Path(handle.name)
+            tmp_path.replace(CONFIG_PATH)
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
 
 
 def first_run_setup(cfg: Config) -> None:

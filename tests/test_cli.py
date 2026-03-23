@@ -75,6 +75,63 @@ class CliPipelineTests(unittest.TestCase):
             rip_audio.assert_not_called()
             encode_tracks.assert_not_called()
 
+    def test_unsupported_metadata_url_is_warned_and_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(base_dir=tmp, work_dir=str(Path(tmp) / "work"))
+            disc_info = DiscInfo(
+                device="/dev/cdrom",
+                track_count=3,
+                track_offsets=[150, 15000, 30000],
+                leadout=45000,
+            )
+            meta = Metadata(source="MusicBrainz", album_artist="Artist", album="Album", year="2000")
+
+            args = Namespace(
+                device="/dev/cdrom",
+                dry_run=True,
+                debug=False,
+                metadata_debug=False,
+                no_image=False,
+                iso=False,
+                no_flac=False,
+                no_mp3=False,
+                ogg=False,
+                opus=False,
+                alac=False,
+                aac=False,
+                wav=False,
+                artist="Artist",
+                album="Album",
+                year="2000",
+                metadata_file=None,
+                metadata_url="https://example.com/album/test",
+                skip_metadata=False,
+                strict_manual_fallback=False,
+                tui=False,
+                flac_compression=8,
+                mp3_bitrate=320,
+                mp3_quality=2,
+                opus_bitrate=None,
+                aac_bitrate=None,
+                no_verify=False,
+                no_cover_art=False,
+                sample_offset=None,
+                accuraterip=False,
+                no_accuraterip=False,
+                tracks=None,
+            )
+
+            with patch("discvault.cli.signal.signal"), \
+                patch("discvault.device.detect", return_value="/dev/cdrom"), \
+                patch("discvault.device.is_readable", return_value=True), \
+                patch("discvault.disc.load_disc_info", return_value=disc_info), \
+                patch("discvault.metadata.lookup.fetch_candidates", return_value=[meta]) as fetch_candidates, \
+                patch("discvault.cli.warn") as warn:
+                _run(args, cfg)
+
+            warn.assert_any_call("Metadata URL import skipped: unsupported provider (example.com).")
+            self.assertEqual(fetch_candidates.call_args.kwargs["metadata_url"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

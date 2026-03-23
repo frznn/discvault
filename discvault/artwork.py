@@ -64,6 +64,11 @@ def describe_cover_art(meta: Metadata, *, enabled: bool = True) -> str:
     return "available via Cover Art Archive"
 
 
+def has_cover_art(meta: Metadata) -> bool:
+    """Return True when the metadata has at least one cover-art source."""
+    return bool(_candidate_urls(meta))
+
+
 def _candidate_urls(meta: Metadata) -> list[str]:
     urls: list[str] = []
     if meta.cover_art_url:
