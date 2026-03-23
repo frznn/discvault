@@ -257,7 +257,12 @@ def rip_image(
             )
         stdout = "".join(output_chunks)
 
-        if proc.returncode == 0 and toc_path.exists():
+        if (
+            proc.returncode == 0
+            and toc_path.exists()
+            and bin_path.exists()
+            and bin_path.stat().st_size > 0
+        ):
             log(f"cdrdao: disc image written ({bin_path.name})")
             return True
 

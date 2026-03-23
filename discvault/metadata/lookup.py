@@ -53,14 +53,18 @@ def fetch_candidates(
     if use_url and metadata_url:
         if debug:
             print(f"[metadata-debug] Importing metadata URL: {metadata_url}")
-        _add(
-            urlimport.lookup_url(
-                metadata_url,
-                disc_info=disc_info,
-                timeout=cfg.metadata_timeout,
-                debug=debug,
+        try:
+            _add(
+                urlimport.lookup_url(
+                    metadata_url,
+                    disc_info=disc_info,
+                    timeout=cfg.metadata_timeout,
+                    debug=debug,
+                )
             )
-        )
+        except ValueError as exc:
+            if debug:
+                print(f"[metadata-debug] Metadata URL import skipped: {exc}")
 
     # 1. Local CDDB cache
     if cfg.use_local_cddb_cache and disc_info.freedb_disc_id:

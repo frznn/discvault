@@ -1,7 +1,6 @@
 """Full Textual TUI for discvault."""
 from __future__ import annotations
 
-import datetime
 import shutil
 import subprocess
 from pathlib import Path
@@ -31,8 +30,11 @@ if TYPE_CHECKING:
     from ..metadata.types import Metadata, DiscInfo
 
 from ..tracks import compact_track_list, default_selected_tracks, parse_track_spec, resolve_selected_tracks
+from .confirm import ConfirmScreen
 from .import_prompt import ImportPromptScreen
+from .output_select import OutputSelectScreen
 from .settings import ConfigScreen
+from .source_select import SourceSelectScreen
 
 
 # ---------------------------------------------------------------------------
@@ -44,52 +46,38 @@ Screen {
     background: $background;
 }
 
+Button {
+    height: auto;
+    padding: 0 1;
+}
+
 #metadata-box {
     height: auto;
     margin: 1 1 1 1;
     padding: 0 1;
     border: round $surface;
+    align: left top;
 }
 
-#sources-row {
+#metadata-left {
+    width: 1fr;
     height: auto;
-    min-height: 1;
     margin: 0;
-    padding: 0;
-    align: left middle;
-}
-
-#sources-lbl {
-    width: auto;
-    padding: 0 1 0 0;
-    color: $text-muted;
-}
-
-#sources-row Checkbox {
-    width: auto;
-    min-width: 0;
-    margin-right: 1;
 }
 
 #metadata-actions-row {
     height: auto;
     min-height: 1;
-    margin: 1 0 0 0;
+    width: 1fr;
+    margin-top: 1;
+    padding: 0;
     align: left middle;
 }
 
-#btn-more {
-    min-width: 16;
-    margin-right: 2;
-}
-
-#btn-import-file {
-    min-width: 12;
+#metadata-actions-row Button {
+    width: auto;
+    min-width: 0;
     margin-right: 1;
-}
-
-#btn-import-url {
-    min-width: 12;
 }
 
 #status-log {
@@ -101,9 +89,13 @@ Screen {
 /* --- ready phase --- */
 #candidates-section {
     height: 6;
-    margin: 0 1;
-    border: round $surface;
+    margin: 0;
+    border: none;
     display: none;
+}
+
+#meta-table {
+    height: 1fr;
 }
 
 #tracklist-scroll {
@@ -123,7 +115,7 @@ Screen {
     height: auto;
     min-height: 1;
     align: left middle;
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 
 .track-enable {
@@ -166,6 +158,7 @@ Screen {
     height: auto;
     min-height: 1;
     margin: 0 1;
+    padding: 0 2;
     align: left middle;
     display: none;
 }
@@ -179,39 +172,29 @@ Screen {
 #input-album  { width: 1fr; margin-right: 2; }
 #input-year   { width: 12; }
 
-#target-label {
-    height: 1;
-    margin: 1 2;
-    color: $text-muted;
-    display: none;
-}
-
-#cover-art-label {
-    height: 1;
-    margin: 0 2 1 2;
-    color: $text-muted;
-    display: none;
-}
-
-#outputs-row {
+#target-row {
     height: auto;
     min-height: 1;
-    margin: 0 1;
-    padding: 0;
+    margin: 1 1;
+    padding: 0 2;
     align: left middle;
     display: none;
 }
 
-#outputs-row Checkbox {
+#target-label {
+    width: 1fr;
+    color: $text-muted;
+}
+
+#chk-cover-art {
     width: auto;
     min-width: 0;
-    margin-right: 1;
 }
 
 /* --- running phase --- */
 #progress-section {
     margin: 0 1;
-    padding: 0 1;
+    padding: 0 2;
     display: none;
 }
 
@@ -227,7 +210,8 @@ Screen {
 
 /* --- done phase --- */
 #done-section {
-    margin: 1 2;
+    margin: 1 1;
+    padding: 0 2;
     display: none;
 }
 
@@ -270,7 +254,8 @@ Screen {
 }
 
 #btn-config { min-width: 12; }
-#btn-target { min-width: 14; margin-left: 1; }
+#btn-target { width: auto; min-width: 0; margin-left: 0; }
+#btn-outputs { min-width: 15; margin-left: 1; }
 #btn-eject  { min-width: 12; margin-left: 2; }
 #btn-start  { min-width: 12; margin-left: 2; }
 #btn-cancel { min-width: 12; margin-left: 2; }
@@ -293,12 +278,70 @@ def _folder_open_command(path: Path) -> list[str] | None:
     return None
 
 
+def _target_button_destination(target: Path | None, base_dir: str) -> tuple[Path | None, str, bool]:
+    """Return the folder, button label, and whether it is the exact album target."""
+    if target is not None and target.exists():
+        return target, "Open Target Dir", True
+
+    library_root = Path(base_dir).expanduser()
+    if library_root.exists():
+        return library_root, "Open Library", False
+
+    return None, "Open Library", False
+
+
+def _target_label_text(base_dir: str, artist: str, album: str, year: str) -> str:
+    if not artist and not album:
+        return ""
+
+    from .. import library
+
+    root = library.album_root(base_dir, artist or "?", album or "?", year)
+    return f"  Target Dir: [dim]{root}[/dim]"
+
+
+def _needs_overwrite_confirmation(path: Path) -> bool:
+    if not path.exists():
+        return False
+    if not path.is_dir():
+        return True
+    try:
+        next(path.iterdir())
+    except StopIteration:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 _PROGRESS_KEYS = ("image", "iso", "rip", "flac", "mp3", "ogg", "opus", "alac", "aac", "wav")
 
 
 def _output_stage_label(fmt_key: str, fmt_name: str) -> str:
     action = "Saving" if fmt_key == "wav" else "Encoding"
     return f"{action} tracks to {fmt_name} format"
+
+
+def _output_option_label(key: str, args, cfg: "Config") -> str:
+    if key == "image":
+        return "Disc image"
+    if key == "iso":
+        return "ISO data"
+    if key == "flac":
+        return f"FLAC lvl {args.flac_compression}"
+    if key == "mp3":
+        return f"MP3 {args.mp3_bitrate} kbps" if args.mp3_bitrate > 0 else "MP3 VBR"
+    if key == "ogg":
+        return "OGG Vorbis"
+    if key == "opus":
+        return f"Opus {cfg.opus_bitrate} kbps"
+    if key == "alac":
+        return "ALAC"
+    if key == "aac":
+        return f"AAC {cfg.aac_bitrate} kbps"
+    if key == "wav":
+        return "WAV copy"
+    return key
 
 class DiscvaultApp(App[None]):
     """Full discvault TUI."""
@@ -357,6 +400,17 @@ class DiscvaultApp(App[None]):
         self._src_gnudb = (preferred == "gnudb")
         self._src_cdtext = (preferred == "cdtext")
         self._src_discogs = (preferred == "discogs")
+        self._out_image = not args.no_image
+        self._out_iso = bool(getattr(args, "iso", False))
+        self._out_flac = not args.no_flac
+        self._out_mp3 = not args.no_mp3
+        self._out_ogg = bool(getattr(args, "ogg", False))
+        self._out_opus = bool(getattr(args, "opus", False))
+        self._out_alac = bool(getattr(args, "alac", False))
+        self._out_aac = bool(getattr(args, "aac", False))
+        self._out_wav = bool(getattr(args, "wav", False))
+        self._cover_art_selected = bool(cfg.download_cover_art)
+        self._cover_art_available = False
         self._metadata_file_path = getattr(args, "metadata_file", "") or ""
         self._metadata_url = getattr(args, "metadata_url", getattr(args, "bandcamp_url", "")) or ""
         self._auto_import_file_pending = bool(self._metadata_file_path)
@@ -377,22 +431,14 @@ class DiscvaultApp(App[None]):
                 yield RichLog(id="status-log", highlight=True, markup=True, max_lines=200)
 
                 with Vertical(id="metadata-box"):
-                    # Metadata source toggles
-                    with Horizontal(id="sources-row"):
-                        yield Label("Metadata Sources:", id="sources-lbl")
-                        yield Checkbox("MusicBrainz", value=self._src_mb, id="chk-src-mb", compact=True)
-                        yield Checkbox("GnuDB", value=self._src_gnudb, id="chk-src-gnudb", compact=True)
-                        yield Checkbox("CD-Text", value=self._src_cdtext, id="chk-src-cdtext", compact=True)
-                        yield Checkbox(self._discogs_source_label(), value=self._src_discogs, id="chk-src-discogs", compact=True)
+                    with Vertical(id="metadata-left"):
+                        with Vertical(id="candidates-section"):
+                            yield DataTable(id="meta-table", cursor_type="row", zebra_stripes=True)
 
                     with Horizontal(id="metadata-actions-row"):
-                        yield Button("Fetch Metadata", id="btn-more", disabled=True)
-                        yield Button("Import File", id="btn-import-file", disabled=True)
-                        yield Button("Import URL", id="btn-import-url", disabled=True)
-
-                # Ready phase: candidates table
-                with Vertical(id="candidates-section"):
-                    yield DataTable(id="meta-table", cursor_type="row", zebra_stripes=True)
+                        yield Button("Search Metadata", id="btn-more", disabled=True)
+                        yield Button("Import from File", id="btn-import-file", disabled=True)
+                        yield Button("Import from URL", id="btn-import-url", disabled=True)
 
                 # Ready phase: tag inputs
                 with Horizontal(id="tags-row"):
@@ -407,21 +453,9 @@ class DiscvaultApp(App[None]):
                 with ScrollableContainer(id="tracklist-scroll"):
                     yield Vertical(id="tracklist-section")
 
-                # Ready phase: output checkboxes
-                mp3_label = f"MP3 {self._args.mp3_bitrate} kbps" if self._args.mp3_bitrate > 0 else "MP3 VBR"
-                with Horizontal(id="outputs-row"):
-                    yield Checkbox("Disc image", value=not self._args.no_image, id="chk-image", compact=True)
-                    yield Checkbox("ISO data", value=getattr(self._args, "iso", False), id="chk-iso", compact=True)
-                    yield Checkbox(f"FLAC lvl {self._args.flac_compression}", value=not self._args.no_flac, id="chk-flac", compact=True)
-                    yield Checkbox(mp3_label, value=not self._args.no_mp3, id="chk-mp3", compact=True)
-                    yield Checkbox("OGG Vorbis", value=getattr(self._args, "ogg", False), id="chk-ogg", compact=True)
-                    yield Checkbox(f"Opus {self._cfg.opus_bitrate} kbps", value=getattr(self._args, "opus", False), id="chk-opus", compact=True)
-                    yield Checkbox("ALAC", value=getattr(self._args, "alac", False), id="chk-alac", compact=True)
-                    yield Checkbox(f"AAC {self._cfg.aac_bitrate} kbps", value=getattr(self._args, "aac", False), id="chk-aac", compact=True)
-                    yield Checkbox("WAV copy", value=getattr(self._args, "wav", False), id="chk-wav", compact=True)
-
-                yield Label("", id="target-label", markup=True)
-                yield Label("", id="cover-art-label", markup=True)
+                with Horizontal(id="target-row"):
+                    yield Label("", id="target-label", markup=True)
+                    yield Checkbox("Download Cover Art", id="chk-cover-art", compact=True, disabled=True)
 
                 # Running phase: progress bars
                 with Vertical(id="progress-section"):
@@ -464,8 +498,9 @@ class DiscvaultApp(App[None]):
             # Action bar — inside #outer, always visible below the scroll area
             with Horizontal(id="action-bar"):
                 yield Button("Settings", id="btn-config")
-                yield Button("Open Target", id="btn-target", disabled=True)
+                yield Button("Select Outputs", id="btn-outputs")
                 with Horizontal(id="action-right"):
+                    yield Button("Open Library", id="btn-target", disabled=True)
                     yield Button("Eject CD", id="btn-eject", disabled=True)
                     yield Button("Start", id="btn-start", variant="success", disabled=True)
                     yield Button("Quit", id="btn-cancel", variant="error")
@@ -478,8 +513,9 @@ class DiscvaultApp(App[None]):
         self._disc_watch_timer = self.set_interval(4.0, self._schedule_disc_watch)
         self._refresh_eject_button()
         self._refresh_target_button()
+        self._refresh_output_button()
         self._refresh_import_buttons()
-        self._start_detection(self._sources_dict(from_ui=True))
+        self._start_detection(self._sources_dict())
 
     def on_worker_state_changed(self, event) -> None:
         from textual.worker import WorkerState
@@ -524,12 +560,6 @@ class DiscvaultApp(App[None]):
             return self.query_one(f"#{widget_id}", Input).value.strip()
         except Exception:
             return ""
-
-    def _checkbox_val(self, widget_id: str) -> bool:
-        try:
-            return self.query_one(f"#{widget_id}", Checkbox).value
-        except Exception:
-            return False
 
     def _manual_search_hints(self) -> tuple[str, str, str]:
         return (
@@ -578,9 +608,6 @@ class DiscvaultApp(App[None]):
             if self._selected_tracks.get(track_number, False) and self._track_is_audio(track_number)
         ]
 
-    def _discogs_source_label(self) -> str:
-        return "Discogs"
-
     def _set_tracklist_message(self, message: str) -> None:
         container = self.query_one("#tracklist-section", Vertical)
         container.remove_children()
@@ -603,6 +630,16 @@ class DiscvaultApp(App[None]):
             )
         self._ensure_meta_tracks(self._manual_meta)
         return self._manual_meta
+
+    def _clear_album_fields(self) -> None:
+        self.query_one("#input-artist", Input).value = ""
+        self.query_one("#input-album", Input).value = ""
+        self.query_one("#input-year", Input).value = ""
+        self.query_one("#target-label", Label).update("")
+        checkbox = self.query_one("#chk-cover-art", Checkbox)
+        checkbox.value = False
+        checkbox.disabled = True
+        self._cover_art_available = False
 
     def _ensure_meta_tracks(self, meta: Metadata) -> list:
         from ..metadata.types import Track
@@ -702,15 +739,8 @@ class DiscvaultApp(App[None]):
             return None
         return library.album_root(self._cfg.base_dir, artist or "?", album or "?", year)
 
-    def _openable_target_path(self) -> tuple[Path | None, bool]:
-        target = self._target_album_root()
-        if target is not None and target.exists():
-            return target, True
-
-        library_root = Path(self._cfg.base_dir).expanduser()
-        if library_root.exists():
-            return library_root, False
-        return None, False
+    def _target_button_destination(self) -> tuple[Path | None, str, bool]:
+        return _target_button_destination(self._target_album_root(), self._cfg.base_dir)
 
     def _refresh_eject_button(self) -> None:
         try:
@@ -731,7 +761,8 @@ class DiscvaultApp(App[None]):
         except Exception:
             return
 
-        path, _ = self._openable_target_path()
+        path, label, _ = self._target_button_destination()
+        btn.label = label
         btn.disabled = (
             self.phase not in {"ready", "done", "error"}
             or self._operation_busy
@@ -739,6 +770,13 @@ class DiscvaultApp(App[None]):
             or path is None
             or _folder_open_command(path) is None
         )
+
+    def _refresh_output_button(self) -> None:
+        try:
+            btn = self.query_one("#btn-outputs", Button)
+        except Exception:
+            return
+        btn.disabled = self.phase == "running" or self._operation_busy
 
     def _refresh_import_buttons(self) -> None:
         enabled = (
@@ -757,34 +795,7 @@ class DiscvaultApp(App[None]):
         except Exception:
             pass
 
-    def _sources_dict(self, *, from_ui: bool = False) -> dict[str, bool]:
-        """Return current source flags.
-
-        With ``from_ui=True`` this snapshots the checkbox values from the live UI
-        and syncs the cached booleans. Without it, this stays thread-safe by only
-        reading the cached values.
-        """
-        if from_ui:
-            try:
-                sources = {
-                    "musicbrainz": self.query_one("#chk-src-mb", Checkbox).value,
-                    "gnudb": self.query_one("#chk-src-gnudb", Checkbox).value,
-                    "cdtext": self.query_one("#chk-src-cdtext", Checkbox).value,
-                    "discogs": self.query_one("#chk-src-discogs", Checkbox).value,
-                }
-            except Exception:
-                sources = {
-                    "musicbrainz": self._src_mb,
-                    "gnudb": self._src_gnudb,
-                    "cdtext": self._src_cdtext,
-                    "discogs": self._src_discogs,
-                }
-            self._src_mb = sources["musicbrainz"]
-            self._src_gnudb = sources["gnudb"]
-            self._src_cdtext = sources["cdtext"]
-            self._src_discogs = sources["discogs"]
-            return sources
-
+    def _sources_dict(self) -> dict[str, bool]:
         return {
             "musicbrainz": self._src_mb,
             "gnudb": self._src_gnudb,
@@ -792,21 +803,25 @@ class DiscvaultApp(App[None]):
             "discogs": self._src_discogs,
         }
 
-    @on(Checkbox.Changed, "#chk-src-mb")
-    def _on_src_mb(self, event: Checkbox.Changed) -> None:
-        self._src_mb = event.value
+    def _outputs_dict(self) -> dict[str, bool]:
+        return {
+            "image": self._out_image,
+            "iso": self._out_iso,
+            "flac": self._out_flac,
+            "mp3": self._out_mp3,
+            "ogg": self._out_ogg,
+            "opus": self._out_opus,
+            "alac": self._out_alac,
+            "aac": self._out_aac,
+            "wav": self._out_wav,
+        }
 
-    @on(Checkbox.Changed, "#chk-src-gnudb")
-    def _on_src_gnudb(self, event: Checkbox.Changed) -> None:
-        self._src_gnudb = event.value
-
-    @on(Checkbox.Changed, "#chk-src-cdtext")
-    def _on_src_cdtext(self, event: Checkbox.Changed) -> None:
-        self._src_cdtext = event.value
-
-    @on(Checkbox.Changed, "#chk-src-discogs")
-    def _on_src_discogs(self, event: Checkbox.Changed) -> None:
-        self._src_discogs = event.value
+    def _output_options(self) -> list[tuple[str, str, bool]]:
+        outputs = self._outputs_dict()
+        return [
+            (key, _output_option_label(key, self._args, self._cfg), outputs[key])
+            for key in ("image", "iso", "flac", "mp3", "ogg", "opus", "alac", "aac", "wav")
+        ]
 
     # ------------------------------------------------------------------
     # Phase 1 — detection + metadata fetch (background workers)
@@ -1019,7 +1034,7 @@ class DiscvaultApp(App[None]):
                     )
                 else:
                     self._tlog(
-                        "[yellow]![/yellow] No metadata found — enter Artist and Album above, then press Fetch Metadata to search MusicBrainz/Discogs, or enter tags manually."
+                        "[yellow]![/yellow] No metadata found — enter Artist and Album above, then press Search Metadata to query MusicBrainz/Discogs, or enter tags manually."
                     )
             else:
                 self._tlog(
@@ -1029,7 +1044,7 @@ class DiscvaultApp(App[None]):
 
     @work(thread=True, name="meta")
     def _start_meta_fetch(self, sources: dict | None = None, merge: bool = False) -> None:
-        """Re-fetch metadata (F5 / Fetch Metadata button). Runs in its own worker thread."""
+        """Re-fetch metadata (F5 / Search Metadata button). Runs in its own worker thread."""
         try:
             self._run_meta_fetch(sources or self._sources_dict(), merge=merge)
         except Exception as exc:
@@ -1132,9 +1147,7 @@ class DiscvaultApp(App[None]):
             "candidates-section",
             "tracklist-scroll",
             "tags-row",
-            "outputs-row",
-            "target-label",
-            "cover-art-label",
+            "target-row",
         ):
             self._show(section)
         self._show("metadata-box")
@@ -1142,9 +1155,10 @@ class DiscvaultApp(App[None]):
         self.query_one("#btn-start", Button).disabled = False
         self.query_one("#btn-more", Button).disabled = False
         self._refresh_eject_button()
+        self._refresh_output_button()
         self._refresh_import_buttons()
         self._update_target_label()
-        self._update_cover_art_label()
+        self._update_cover_art_checkbox()
         if self._auto_import_file_pending:
             self._auto_import_file_pending = False
             self.set_timer(0, lambda: self._start_import_from_value("file", self._metadata_file_path))
@@ -1168,32 +1182,28 @@ class DiscvaultApp(App[None]):
         self._render_track_editor(m)
 
         self._update_target_label()
-        self._update_cover_art_label()
+        self._update_cover_art_checkbox()
 
     def _update_target_label(self) -> None:
-        from .. import library
         artist = self._input_val("input-artist")
         album = self._input_val("input-album")
         year = self._input_val("input-year")
-        if artist or album:
-            root = library.album_root(
-                self._cfg.base_dir, artist or "?", album or "?", year
-            )
-            self.query_one("#target-label", Label).update(f"  Target: [dim]{root}[/dim]")
+        self.query_one("#target-label", Label).update(
+            _target_label_text(self._cfg.base_dir, artist, album, year)
+        )
         self._refresh_target_button()
 
-    def _update_cover_art_label(self) -> None:
+    def _update_cover_art_checkbox(self) -> None:
         from .. import artwork as artwork_mod
 
         meta = self._current_meta()
         if meta is None:
-            status = artwork_mod.describe_cover_art(
-                self._manual_meta_or_create(),
-                enabled=self._cfg.download_cover_art,
-            )
-        else:
-            status = artwork_mod.describe_cover_art(meta, enabled=self._cfg.download_cover_art)
-        self.query_one("#cover-art-label", Label).update(f"  Cover art: [dim]{status}[/dim]")
+            meta = self._manual_meta_or_create()
+        available = artwork_mod.has_cover_art(meta)
+        self._cover_art_available = available
+        checkbox = self.query_one("#chk-cover-art", Checkbox)
+        checkbox.disabled = not available
+        checkbox.value = self._cover_art_selected if available else False
 
     # ------------------------------------------------------------------
     # Events in ready phase
@@ -1212,7 +1222,13 @@ class DiscvaultApp(App[None]):
             self._manual_meta.album = album
             self._manual_meta.year = year
         self._update_target_label()
-        self._update_cover_art_label()
+        self._update_cover_art_checkbox()
+
+    @on(Checkbox.Changed, "#chk-cover-art")
+    def _on_cover_art_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.disabled:
+            return
+        self._cover_art_selected = event.value
 
     @on(Input.Changed, ".track-edit")
     def _on_track_edit(self, event: Input.Changed) -> None:
@@ -1263,13 +1279,15 @@ class DiscvaultApp(App[None]):
         if bid == "btn-config":
             self._open_settings()
         elif bid == "btn-more":
-            self._do_fetch_metadata()
+            self._open_metadata_search()
         elif bid == "btn-import-file":
             self._do_import_file()
         elif bid == "btn-import-url":
             self._do_import_url()
         elif bid == "btn-target":
             self._do_open_target()
+        elif bid == "btn-outputs":
+            self._open_output_selector()
         elif bid == "btn-eject":
             self._do_eject()
         elif bid == "btn-start":
@@ -1284,6 +1302,16 @@ class DiscvaultApp(App[None]):
         if self.phase == "running" or self._operation_busy:
             return
         self.push_screen(ConfigScreen(self._cfg), self._apply_settings)
+
+    def _open_metadata_search(self) -> None:
+        if self.phase == "running" or self._operation_busy:
+            return
+        self.push_screen(SourceSelectScreen(self._sources_dict()), self._apply_search_sources)
+
+    def _open_output_selector(self) -> None:
+        if self.phase == "running" or self._operation_busy:
+            return
+        self.push_screen(OutputSelectScreen(self._output_options()), self._apply_outputs)
 
     def _apply_settings(self, updated_cfg: "Config" | None) -> None:
         if updated_cfg is None:
@@ -1300,28 +1328,43 @@ class DiscvaultApp(App[None]):
         self._src_gnudb = preferred == "gnudb"
         self._src_cdtext = preferred == "cdtext"
         self._src_discogs = preferred == "discogs"
-        self.query_one("#chk-src-mb", Checkbox).value = self._src_mb
-        self.query_one("#chk-src-gnudb", Checkbox).value = self._src_gnudb
-        self.query_one("#chk-src-cdtext", Checkbox).value = self._src_cdtext
-        self.query_one("#chk-src-discogs", Checkbox).value = self._src_discogs
-        self.query_one("#chk-src-discogs", Checkbox).label = self._discogs_source_label()
-        self.query_one("#chk-opus", Checkbox).label = f"Opus {self._cfg.opus_bitrate} kbps"
-        self.query_one("#chk-aac", Checkbox).label = f"AAC {self._cfg.aac_bitrate} kbps"
+        self._cover_art_selected = self._cfg.download_cover_art
         self._update_target_label()
-        self._update_cover_art_label()
+        self._update_cover_art_checkbox()
         self._log("[green]✓[/green] Settings saved.")
 
-    def _do_fetch_metadata(self) -> None:
-        sources = self._sources_dict(from_ui=True)
+    def _apply_search_sources(self, sources: dict[str, bool] | None) -> None:
+        if sources is None:
+            return
+        self._src_mb = sources.get("musicbrainz", False)
+        self._src_gnudb = sources.get("gnudb", False)
+        self._src_cdtext = sources.get("cdtext", False)
+        self._src_discogs = sources.get("discogs", False)
+        self._do_fetch_metadata(sources)
+
+    def _apply_outputs(self, outputs: dict[str, bool] | None) -> None:
+        if outputs is None:
+            return
+        self._out_image = outputs.get("image", False)
+        self._out_iso = outputs.get("iso", False)
+        self._out_flac = outputs.get("flac", False)
+        self._out_mp3 = outputs.get("mp3", False)
+        self._out_ogg = outputs.get("ogg", False)
+        self._out_opus = outputs.get("opus", False)
+        self._out_alac = outputs.get("alac", False)
+        self._out_aac = outputs.get("aac", False)
+        self._out_wav = outputs.get("wav", False)
+
+    def _do_fetch_metadata(self, sources: dict[str, bool] | None = None) -> None:
+        sources = sources or self._sources_dict()
         active = [k for k, v in sources.items() if v]
         if not active:
-            self.notify("No sources selected — check at least one source.", severity="warning")
+            self._log("[yellow]![/yellow] No sources selected — check at least one source.")
             return
         if self._operation_busy:
             return
         self.phase = "detecting"
         self._operation_busy = True
-        self.notify(f"Fetching from: {', '.join(active)}")
         self._log(f"> Fetching metadata from: {', '.join(active)}")
         self._candidates = []
         self._selected_idx = 0
@@ -1330,6 +1373,7 @@ class DiscvaultApp(App[None]):
         self.query_one("#btn-more", Button).disabled = True
         self.query_one("#btn-start", Button).disabled = True
         self._refresh_eject_button()
+        self._refresh_output_button()
         self._refresh_import_buttons()
         self._start_meta_fetch(sources)
 
@@ -1366,7 +1410,8 @@ class DiscvaultApp(App[None]):
             return
         self._metadata_file_path = value
         if not value:
-            self.notify("No metadata file path is set.", severity="warning")
+            self._log("[yellow]![/yellow] No metadata file path is set.")
+            self._refresh_output_button()
             self._refresh_import_buttons()
             return
         self._start_import_from_value("file", value)
@@ -1376,7 +1421,8 @@ class DiscvaultApp(App[None]):
             return
         self._metadata_url = value
         if not value:
-            self.notify("No metadata URL is set.", severity="warning")
+            self._log("[yellow]![/yellow] No metadata URL is set.")
+            self._refresh_output_button()
             self._refresh_import_buttons()
             return
         self._start_import_from_value("url", value)
@@ -1406,6 +1452,7 @@ class DiscvaultApp(App[None]):
         self.query_one("#btn-start", Button).disabled = True
         self.query_one("#btn-more", Button).disabled = True
         self._refresh_eject_button()
+        self._refresh_output_button()
         self._refresh_import_buttons()
         self._log(f"> Ejecting disc from [bold]{device}[/bold]...")
         self._start_eject(device)
@@ -1414,9 +1461,9 @@ class DiscvaultApp(App[None]):
         if self._target_open_busy or self.phase not in {"ready", "done", "error"}:
             return
 
-        path, exact_target = self._openable_target_path()
+        path, _label, exact_target = self._target_button_destination()
         if path is None:
-            self._log("[yellow]![/yellow] No target folder is available to open.")
+            self._log("[yellow]![/yellow] No library folder is available to open.")
             self._refresh_target_button()
             return
 
@@ -1444,15 +1491,17 @@ class DiscvaultApp(App[None]):
             return
         artist = self._input_val("input-artist")
         album = self._input_val("input-album")
-        do_image = self._checkbox_val("chk-image")
-        do_iso = self._checkbox_val("chk-iso")
-        do_flac = self._checkbox_val("chk-flac")
-        do_mp3 = self._checkbox_val("chk-mp3")
-        do_ogg = self._checkbox_val("chk-ogg")
-        do_opus = self._checkbox_val("chk-opus")
-        do_alac = self._checkbox_val("chk-alac")
-        do_aac = self._checkbox_val("chk-aac")
-        do_wav = self._checkbox_val("chk-wav")
+        year = self._input_val("input-year")
+        outputs = self._outputs_dict()
+        do_image = outputs["image"]
+        do_iso = outputs["iso"]
+        do_flac = outputs["flac"]
+        do_mp3 = outputs["mp3"]
+        do_ogg = outputs["ogg"]
+        do_opus = outputs["opus"]
+        do_alac = outputs["alac"]
+        do_aac = outputs["aac"]
+        do_wav = outputs["wav"]
 
         if not artist:
             self._log("[yellow]![/yellow] Artist is required.")
@@ -1471,21 +1520,123 @@ class DiscvaultApp(App[None]):
             self._log("[yellow]![/yellow] Select at least one audio track.")
             return
 
+        from .. import library
+
+        album_root = library.album_root(self._cfg.base_dir, artist, album, year)
+        if _needs_overwrite_confirmation(album_root):
+            message = (
+                "The target album directory already exists and may contain files.\n\n"
+                f"{album_root}\n\n"
+                "Starting may overwrite existing outputs."
+            )
+            self.push_screen(
+                ConfirmScreen(
+                    title="Existing Target Directory",
+                    message=message,
+                    confirm_label="Start Anyway",
+                ),
+                lambda confirmed: self._apply_start_confirmation(
+                    confirmed,
+                    artist,
+                    album,
+                    year,
+                    do_image,
+                    do_iso,
+                    do_flac,
+                    do_mp3,
+                    do_ogg,
+                    do_opus,
+                    do_alac,
+                    do_aac,
+                    do_wav,
+                    selected_tracks,
+                ),
+            )
+            return
+
+        self._begin_start(
+            artist,
+            album,
+            year,
+            do_image,
+            do_iso,
+            do_flac,
+            do_mp3,
+            do_ogg,
+            do_opus,
+            do_alac,
+            do_aac,
+            do_wav,
+            selected_tracks,
+        )
+
+    def _apply_start_confirmation(
+        self,
+        confirmed: bool | None,
+        artist: str,
+        album: str,
+        year: str,
+        do_image: bool,
+        do_iso: bool,
+        do_flac: bool,
+        do_mp3: bool,
+        do_ogg: bool,
+        do_opus: bool,
+        do_alac: bool,
+        do_aac: bool,
+        do_wav: bool,
+        selected_tracks: list[int],
+    ) -> None:
+        if not confirmed:
+            self._log("[yellow]![/yellow] Start cancelled.")
+            return
+
+        self._begin_start(
+            artist,
+            album,
+            year,
+            do_image,
+            do_iso,
+            do_flac,
+            do_mp3,
+            do_ogg,
+            do_opus,
+            do_alac,
+            do_aac,
+            do_wav,
+            selected_tracks,
+        )
+
+    def _begin_start(
+        self,
+        artist: str,
+        album: str,
+        year: str,
+        do_image: bool,
+        do_iso: bool,
+        do_flac: bool,
+        do_mp3: bool,
+        do_ogg: bool,
+        do_opus: bool,
+        do_alac: bool,
+        do_aac: bool,
+        do_wav: bool,
+        selected_tracks: list[int],
+    ) -> None:
         self.phase = "running"
         self._operation_busy = True
         self._last_accuraterip_status = ""
         self.query_one("#btn-start", Button).disabled = True
         self.query_one("#btn-more", Button).disabled = True
         self._refresh_eject_button()
+        self._refresh_output_button()
         self._refresh_import_buttons()
 
         for section in (
             "candidates-section",
             "tracklist-scroll",
             "tags-row",
-            "outputs-row",
-            "target-label",
-            "cover-art-label",
+            "target-row",
         ):
             self._hide(section)
         self._hide("metadata-box")
@@ -1494,10 +1645,21 @@ class DiscvaultApp(App[None]):
 
         self.query_one("#btn-cancel", Button).label = "Cancel"
 
-        self._start_rip(artist, album,
-                        self._input_val("input-year"),
-                        do_image, self._checkbox_val("chk-iso"), do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav,
-                        selected_tracks)
+        self._start_rip(
+            artist,
+            album,
+            year,
+            do_image,
+            do_iso,
+            do_flac,
+            do_mp3,
+            do_ogg,
+            do_opus,
+            do_alac,
+            do_aac,
+            do_wav,
+            selected_tracks,
+        )
 
     @work(thread=True, name="rip")
     def _start_rip(
@@ -1507,8 +1669,14 @@ class DiscvaultApp(App[None]):
         do_opus: bool, do_alac: bool, do_aac: bool, do_wav: bool,
         selected_tracks: list[int],
     ) -> None:
-        from .. import rip as rip_mod, encode as enc_mod, library, verify as verify_mod, artwork as artwork_mod
         from ..metadata.types import Metadata as MetaType
+        from ..pipeline import (
+            BackupCallbacks,
+            BackupRunError,
+            BackupRunRequest,
+            OutputSelection,
+            run_backup,
+        )
 
         args = self._args
         cfg = self._cfg
@@ -1534,301 +1702,68 @@ class DiscvaultApp(App[None]):
             track.artist = track.artist.strip()
 
         disc_info = self._disc_info
-        device = disc_info.device if disc_info else args.device
-        track_count = disc_info.track_count if disc_info else 0
-        if do_image and disc_info is None:
-            self._tlog("[bold red]✗ No disc layout available for image export.[/bold red]")
+        if disc_info is None:
+            self._tlog("[bold red]✗ No disc info is available for ripping.[/bold red]")
             self.call_from_thread(self._enter_error)
             return
 
-        album_root = library.album_root(cfg.base_dir, artist, album, year)
-        album_root_existed = album_root.exists()
-        img_dir = library.image_dir(album_root)
-        fl_dir = library.flac_dir(album_root)
-        mp_dir = library.mp3_dir(album_root)
-        og_dir = library.ogg_dir(album_root)
-        op_dir = library.opus_dir(album_root)
-        al_dir = library.alac_dir(album_root)
-        aa_dir = library.aac_dir(album_root)
-        wa_dir = library.wav_dir(album_root)
+        outputs = OutputSelection(
+            image=do_image,
+            iso=do_iso,
+            flac=do_flac,
+            mp3=do_mp3,
+            ogg=do_ogg,
+            opus=do_opus,
+            alac=do_alac,
+            aac=do_aac,
+            wav=do_wav,
+        )
+        cover_art_enabled = self._cover_art_selected and self._cover_art_available
 
-        work_dir = Path(cfg.work_dir)
-        work_dir_existed = work_dir.exists()
-        work_dir.mkdir(parents=True, exist_ok=True)
-        self._cleanup.track_dir(work_dir, created=not work_dir_existed)
-
-        toc_path = cue_path = bin_path = iso_path = None
-        wav_files: list[Path] = []
-        audio_formats: list[tuple[str, str]] = []
-        if do_flac:
-            audio_formats.append(("flac", "FLAC"))
-        if do_mp3:
-            audio_formats.append(("mp3", "MP3"))
-        if do_ogg:
-            audio_formats.append(("ogg", "OGG Vorbis"))
-        if do_opus:
-            audio_formats.append(("opus", "Opus"))
-        if do_alac:
-            audio_formats.append(("alac", "ALAC"))
-        if do_aac:
-            audio_formats.append(("aac", "AAC/M4A"))
-        if do_wav:
-            audio_formats.append(("wav", "WAV"))
-
-        # ── Disc image ──────────────────────────────────────────────
-        if do_image:
-            self._tlog("> Creating disc image...")
-            self.call_from_thread(
-                self._pb_set, "image", "Creating disc image (cdrdao)...", track_count or None
-            )
-            stem = library.image_stem(artist, album, year)
-            self._cleanup.track_dir(album_root, created=not album_root_existed)
-            img_dir_existed = img_dir.exists()
-            img_dir.mkdir(parents=True, exist_ok=True)
-            self._cleanup.track_dir(img_dir, created=not img_dir_existed)
-            stem = library.unique_image_stem(img_dir, stem)
-            toc_path = img_dir / f"{stem}.toc"
-            bin_path = img_dir / f"{stem}.bin"
-
-            def image_cb(current: int, total: int, label: str) -> None:
-                self.call_from_thread(self._pb_update, "image", current, total, label)
-
-            ok = rip_mod.rip_image(
-                device, toc_path, bin_path, self._cleanup,
-                driver=cfg.cdrdao_driver, debug=args.debug,
-                process_callback=lambda p: setattr(self, "_current_proc", p),
-                progress_callback=image_cb,
-                track_count=track_count,
-                track_offsets=disc_info.track_offsets if disc_info else None,
-                leadout=disc_info.leadout if disc_info else 0,
-            )
-            self._current_proc = None
-            if not ok:
-                self._tlog("[bold red]✗ Disc image failed.[/bold red]")
-                self._cleanup.remove_all()
-                self.call_from_thread(self._enter_error)
-                return
-            self._tlog("[green]✓[/green] Disc image created.")
-            self.call_from_thread(self._pb_done, "image", "✓ Disc image")
-            cue_path = img_dir / f"{stem}.cue"
-            try:
-                rip_mod.write_cue_file(cue_path, bin_path, disc_info, toc_path=toc_path, cleanup=self._cleanup)
-                self._tlog(f"[green]✓[/green] CUE sidecar saved: {cue_path.name}")
-            except OSError as exc:
-                self._tlog(f"[bold red]✗ Failed to write CUE sidecar: {exc}[/bold red]")
-                self._cleanup.remove_all()
-                self.call_from_thread(self._enter_error)
-                return
-
-            if do_iso:
-                self._tlog("> Exporting ISO data image...")
-                self.call_from_thread(
-                    self._pb_set,
-                    "iso",
-                    "Exporting ISO data image...",
-                    len(disc_info.data_track_numbers) or None,
-                )
-                iso_path = img_dir / f"{stem}.iso"
-
-                def iso_cb(current: int, total: int, label: str) -> None:
-                    self.call_from_thread(self._pb_update, "iso", current, total, label)
-
-                exported_iso, detail = rip_mod.export_iso_from_bin(
-                    iso_path,
-                    bin_path,
-                    disc_info,
-                    toc_path=toc_path,
-                    cleanup=self._cleanup,
-                    progress_callback=iso_cb,
-                )
-                if exported_iso is not None:
-                    iso_path = exported_iso
-                    self._tlog(f"[green]✓[/green] ISO saved: {iso_path.name}")
-                    self.call_from_thread(self._pb_done, "iso", "✓ ISO data image")
-                else:
-                    iso_path = None
-                    self._tlog(f"[yellow]![/yellow] {detail}")
-                    self.call_from_thread(self._pb_done, "iso", "✓ ISO skipped")
-
-        # ── Audio outputs ───────────────────────────────────────────
-        if audio_formats:
-            selected_total = len(selected_tracks)
-            self._tlog("> Ripping audio tracks...")
-            self.call_from_thread(
-                self._pb_set,
-                "rip",
-                "Ripping audio tracks...",
-                selected_total or None,
-            )
-
-            def audio_cb(current: int, total: int, fname: str = "") -> None:
-                label = f"Ripping audio tracks ({current}/{total})"
-                if fname:
-                    label = f"{label}: {fname}"
-                self.call_from_thread(
-                    self._pb_update, "rip", current, max(total, 1), label
-                )
-
-            wav_files = rip_mod.rip_audio(
-                device, work_dir, track_count, self._cleanup,
-                debug=args.debug,
-                progress_callback=audio_cb,
-                process_callback=lambda p: setattr(self, "_current_proc", p),
-                selected_tracks=selected_tracks,
-                sample_offset=cfg.cdparanoia_sample_offset,
-            )
-            self._current_proc = None
-            if wav_files is None:
-                self._tlog("[bold red]✗ Failed to rip audio tracks.[/bold red]")
-                self._cleanup.remove_all()
-                self.call_from_thread(self._enter_error)
-                return
-            self._tlog("[green]✓[/green] Audio tracks ripped.")
-            self.call_from_thread(self._pb_done, "rip", "✓ Audio tracks")
-
-            if cfg.accuraterip_enabled:
-                self._tlog("> Running AccurateRip verification...")
-                if cfg.cdparanoia_sample_offset == 0:
-                    self._tlog(
-                        "[yellow]![/yellow] AccurateRip is enabled with sample offset 0. "
-                        "Set your drive offset in Settings for more reliable results."
-                    )
-                verified, detail = verify_mod.verify_accuraterip(wav_files, debug=args.debug)
-                self._last_accuraterip_status = detail
-                if verified is True:
-                    self._tlog(f"[green]✓[/green] {detail}")
-                elif verified is False:
-                    self._tlog(f"[yellow]![/yellow] {detail}")
-                else:
-                    self._tlog(f"[yellow]![/yellow] {detail}")
-
-            self._cleanup.track_dir(album_root, created=not album_root_existed)
-
-            def _encode_one_format(fmt_key: str, fmt_name: str) -> bool:
-                total_tracks = len(wav_files)
-                stage_label = _output_stage_label(fmt_key, fmt_name)
-                self.call_from_thread(
-                    self._pb_set,
-                    fmt_key,
-                    f"{stage_label}...",
-                    total_tracks or None,
-                )
-
-                self._tlog(f"> {stage_label}...")
-
-                def encode_cb(done: int, total: int) -> None:
-                    self.call_from_thread(
-                        self._pb_update,
-                        fmt_key,
-                        done,
-                        max(total, 1),
-                        f"{stage_label} ({done}/{total})",
-                    )
-
-                ok = enc_mod.encode_tracks(
-                    wav_files, meta,
-                    flac_dir=fl_dir if fmt_key == "flac" else None,
-                    mp3_dir=mp_dir if fmt_key == "mp3" else None,
-                    ogg_dir=og_dir if fmt_key == "ogg" else None,
-                    opus_dir=op_dir if fmt_key == "opus" else None,
-                    alac_dir=al_dir if fmt_key == "alac" else None,
-                    aac_dir=aa_dir if fmt_key == "aac" else None,
-                    wav_dir=wa_dir if fmt_key == "wav" else None,
-                    flac_compression=args.flac_compression,
-                    flac_verify=not args.no_verify,
-                    mp3_quality=args.mp3_quality,
-                    mp3_bitrate=args.mp3_bitrate,
-                    opus_bitrate=cfg.opus_bitrate,
-                    aac_bitrate=cfg.aac_bitrate,
-                    cleanup=self._cleanup,
-                    debug=args.debug,
-                    progress_callback=encode_cb,
-                    track_total_hint=max(selected_tracks) if selected_tracks else None,
-                )
-                if ok:
-                    self._tlog(f"[green]✓[/green] {fmt_name} format complete.")
-                    self.call_from_thread(self._pb_done, fmt_key, f"✓ {fmt_name} format")
-                return ok
-
-            if do_flac:
-                fl_dir_existed = fl_dir.exists()
-                fl_dir.mkdir(parents=True, exist_ok=True)
-                self._cleanup.track_dir(fl_dir, created=not fl_dir_existed)
-            if do_mp3:
-                mp_dir_existed = mp_dir.exists()
-                mp_dir.mkdir(parents=True, exist_ok=True)
-                self._cleanup.track_dir(mp_dir, created=not mp_dir_existed)
-            if do_ogg:
-                og_dir_existed = og_dir.exists()
-                og_dir.mkdir(parents=True, exist_ok=True)
-                self._cleanup.track_dir(og_dir, created=not og_dir_existed)
-            if do_opus:
-                op_dir_existed = op_dir.exists()
-                op_dir.mkdir(parents=True, exist_ok=True)
-                self._cleanup.track_dir(op_dir, created=not op_dir_existed)
-            if do_alac:
-                al_dir_existed = al_dir.exists()
-                al_dir.mkdir(parents=True, exist_ok=True)
-                self._cleanup.track_dir(al_dir, created=not al_dir_existed)
-            if do_aac:
-                aa_dir_existed = aa_dir.exists()
-                aa_dir.mkdir(parents=True, exist_ok=True)
-                self._cleanup.track_dir(aa_dir, created=not aa_dir_existed)
-            if do_wav:
-                wa_dir_existed = wa_dir.exists()
-                wa_dir.mkdir(parents=True, exist_ok=True)
-                self._cleanup.track_dir(wa_dir, created=not wa_dir_existed)
-
-            for fmt_key, fmt_name in audio_formats:
-                if not _encode_one_format(fmt_key, fmt_name):
-                    self._tlog(f"[bold red]✗ Encoding to {fmt_name} format failed.[/bold red]")
-                    self._cleanup.remove_all()
-                    self.call_from_thread(self._enter_error)
-                    return
-
-        cover_art_path = None
-        if cfg.download_cover_art:
-            self._tlog(f"> Cover art: {artwork_mod.describe_cover_art(meta, enabled=True)}")
-            cover_art_path = artwork_mod.download_cover_art(
-                meta,
-                album_root,
-                cleanup=self._cleanup,
-                timeout=cfg.metadata_timeout,
-                debug=args.debug,
-            )
-            if cover_art_path is not None:
-                self._tlog(f"[green]✓[/green] Cover art saved: {cover_art_path.name}")
-            else:
-                self._tlog("[yellow]![/yellow] Cover art not downloaded.")
-
-        # ── backup-info.txt ─────────────────────────────────────────
-        self._write_backup_info(
-            album_root, device, artist, album, year, meta.source,
-            wav_files, track_count, toc_path, cue_path, bin_path, iso_path,
-            do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, args,
-            selected_tracks,
-            cover_art_path,
+        callbacks = BackupCallbacks(
+            info=lambda msg: self._tlog(f"> {msg}"),
+            warn=lambda msg: self._tlog(f"[yellow]![/yellow] {msg}"),
+            success=lambda msg: self._tlog(f"[green]✓[/green] {msg}"),
+            stage_start=lambda which, label, total: self.call_from_thread(self._pb_set, which, label, total),
+            stage_progress=lambda which, current, total, label: self.call_from_thread(
+                self._pb_update, which, current, total, label
+            ),
+            stage_done=lambda which, label: self.call_from_thread(self._pb_done, which, label),
+            set_process=lambda proc: setattr(self, "_current_proc", proc),
         )
 
-        # ── Cleanup WAVs ────────────────────────────────────────────
-        if not cfg.keep_wav:
-            for w in wav_files:
-                w.unlink(missing_ok=True)
-            try:
-                work_dir.rmdir()
-            except OSError:
-                pass
+        try:
+            result = run_backup(
+                BackupRunRequest(
+                    device=disc_info.device,
+                    disc_info=disc_info,
+                    meta=meta,
+                    artist=artist,
+                    album=album,
+                    year=year,
+                    outputs=outputs,
+                    selected_tracks=selected_tracks,
+                    cfg=cfg,
+                    args=args,
+                    cleanup=self._cleanup,
+                    cover_art_enabled=cover_art_enabled,
+                ),
+                callbacks,
+            )
+        except BackupRunError as exc:
+            self._current_proc = None
+            self._tlog(f"[bold red]✗ {exc}[/bold red]")
+            self._cleanup.remove_all()
+            self.call_from_thread(self._enter_error)
+            return
 
-        if cfg.eject_after:
-            subprocess.run(["eject", device], capture_output=True)
-
-        self._cleanup.clear()
-        completed_track_count = len(wav_files) or track_count
+        self._current_proc = None
+        self._last_accuraterip_status = result.accuraterip_detail
         self.call_from_thread(
             self._enter_done,
-            album_root, artist, album, year, completed_track_count,
+            result.album_root, artist, album, year, result.completed_track_count,
             meta.source, do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, args,
-            selected_tracks, cover_art_path, cue_path, iso_path,
+            selected_tracks, result.cover_art_path, cover_art_enabled, result.cue_path, result.iso_path,
         )
 
     # ------------------------------------------------------------------
@@ -1974,6 +1909,7 @@ class DiscvaultApp(App[None]):
             self.query_one("#btn-start", Button).disabled = False
             self.query_one("#btn-more", Button).disabled = False
         self._refresh_eject_button()
+        self._refresh_output_button()
         self._refresh_import_buttons()
 
     # ------------------------------------------------------------------
@@ -2081,9 +2017,7 @@ class DiscvaultApp(App[None]):
             "candidates-section",
             "tracklist-scroll",
             "tags-row",
-            "outputs-row",
-            "target-label",
-            "cover-art-label",
+            "target-row",
         ):
             self._hide(section)
 
@@ -2092,6 +2026,7 @@ class DiscvaultApp(App[None]):
         self.query_one("#btn-start", Button).disabled = True
         self.query_one("#btn-more", Button).disabled = True
         self._refresh_eject_button()
+        self._refresh_output_button()
         self._refresh_import_buttons()
 
         if previous_phase == "done":
@@ -2108,7 +2043,7 @@ class DiscvaultApp(App[None]):
                 "[yellow]![/yellow] Data track(s) detected and excluded by default: "
                 f"{compact_track_list(disc_info.data_track_numbers)}"
             )
-        self._start_meta_fetch(self._sources_dict(from_ui=True))
+        self._start_meta_fetch(self._sources_dict())
 
     # ------------------------------------------------------------------
     # Phase 4 — done / error
@@ -2134,6 +2069,7 @@ class DiscvaultApp(App[None]):
         args,
         selected_tracks: list[int],
         cover_art_path: Path | None,
+        cover_art_enabled: bool,
         cue_path: Path | None,
         iso_path: Path | None,
     ) -> None:
@@ -2144,6 +2080,7 @@ class DiscvaultApp(App[None]):
         self.query_one("#btn-start", Button).disabled = True
         self.query_one("#btn-more", Button).disabled = True
         self._refresh_eject_button()
+        self._refresh_output_button()
         self._refresh_import_buttons()
 
         formats = []
@@ -2182,18 +2119,13 @@ class DiscvaultApp(App[None]):
             details_lines.append(f"  AccurateRip: {self._last_accuraterip_status}")
         if cover_art_path is not None:
             details_lines.append(f"  Cover art: [dim]{cover_art_path.name}[/dim]")
-        elif self._cfg.download_cover_art:
+        elif cover_art_enabled:
             details_lines.append("  Cover art: [dim]not downloaded[/dim]")
 
         self.query_one("#done-title", Label).update("[bold green]✓ Done![/bold green]")
         self.query_one("#done-details", Static).update("\n".join(details_lines))
         self._show("done-section")
-        self.notify(
-            f"{artist} — {album}",
-            title="DiscVault rip complete",
-            severity="information",
-            timeout=12,
-        )
+        self._log(f"[green]✓[/green] Rip complete: [bold]{artist}[/bold] — {album}")
         self._start_completion_alerts(
             "DiscVault rip complete",
             f"{artist} — {album}",
@@ -2212,6 +2144,7 @@ class DiscvaultApp(App[None]):
         btn.label = "Quit"
         btn.disabled = False
         self._refresh_eject_button()
+        self._refresh_output_button()
         self._refresh_import_buttons()
 
     def _enter_waiting_for_disc(self, message: str) -> None:
@@ -2222,6 +2155,7 @@ class DiscvaultApp(App[None]):
         self._manual_meta = None
         self._selected_idx = 0
         self._selected_tracks = {}
+        self._clear_album_fields()
 
         self._hide("done-section")
         self._hide("progress-section")
@@ -2230,9 +2164,7 @@ class DiscvaultApp(App[None]):
             "candidates-section",
             "tracklist-scroll",
             "tags-row",
-            "outputs-row",
-            "target-label",
-            "cover-art-label",
+            "target-row",
         ):
             self._hide(section)
 
@@ -2240,6 +2172,8 @@ class DiscvaultApp(App[None]):
         self._set_tracklist_message("[dim](insert a disc to load metadata)[/dim]")
         self.query_one("#btn-start", Button).disabled = True
         self.query_one("#btn-more", Button).disabled = True
+        self._refresh_target_button()
+        self._refresh_output_button()
         self._refresh_import_buttons()
 
         btn = self.query_one("#btn-cancel", Button)
@@ -2286,56 +2220,3 @@ class DiscvaultApp(App[None]):
                 proc.wait(timeout=3)
             except (OSError, subprocess.TimeoutExpired):
                 pass
-
-    # ------------------------------------------------------------------
-    # backup-info.txt
-    # ------------------------------------------------------------------
-
-    def _write_backup_info(
-        self, album_root: Path, device: str, artist: str, album: str,
-        year: str, meta_source: str, wav_files: list[Path], track_count: int,
-        toc_path, cue_path, bin_path, iso_path, do_image: bool, do_iso: bool, do_flac: bool, do_mp3: bool,
-        do_ogg: bool, do_opus: bool, do_alac: bool, do_aac: bool, do_wav: bool,
-        args, selected_tracks: list[int], cover_art_path: Path | None,
-    ) -> None:
-        info_path = album_root / "backup-info.txt"
-        self._cleanup.track_file(info_path)
-        lines = [
-            f"Backup timestamp: {datetime.datetime.now().astimezone().isoformat()}",
-            f"Device: {device}",
-            f"Artist: {artist}",
-            f"Album: {album}",
-        ]
-        if year:
-            lines.append(f"Year: {year}")
-        lines += [
-            f"Metadata source: {meta_source}",
-            f"Track count: {len(wav_files) or track_count}",
-            f"Selected tracks: {compact_track_list(selected_tracks)}",
-            f"Disc image: {'yes' if do_image else 'no'}",
-            f"FLAC: {'yes' if do_flac else 'no'}",
-            f"MP3: {'yes' if do_mp3 else 'no'}",
-            f"OGG: {'yes' if do_ogg else 'no'}",
-            f"Opus: {'yes' if do_opus else 'no'}",
-            f"ALAC: {'yes' if do_alac else 'no'}",
-            f"AAC/M4A: {'yes' if do_aac else 'no'}",
-            f"WAV copy: {'yes' if do_wav else 'no'}",
-            f"AccurateRip: {'yes' if self._cfg.accuraterip_enabled else 'no'}",
-            f"Sample offset: {self._cfg.cdparanoia_sample_offset}",
-            f"Cover art enabled: {'yes' if self._cfg.download_cover_art else 'no'}",
-        ]
-        if do_image and toc_path:
-            lines.append(f"Image TOC: {toc_path}")
-            lines.append(f"Image CUE: {cue_path}")
-            lines.append(f"Image BIN: {bin_path}")
-        lines.append(f"ISO export: {'yes' if do_iso else 'no'}")
-        if iso_path is not None:
-            lines.append(f"Image ISO: {iso_path}")
-        if self._last_accuraterip_status:
-            lines.append(f"AccurateRip result: {self._last_accuraterip_status}")
-        if cover_art_path is not None:
-            lines.append(f"Cover art: {cover_art_path}")
-        try:
-            info_path.write_text("\n".join(lines) + "\n")
-        except OSError:
-            pass

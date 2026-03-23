@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 from .types import DiscInfo, Metadata
 from . import bandcamp
 
+_SUPPORTED_PROVIDERS = {"Bandcamp"}
+
 
 def lookup_url(
     url: str,
@@ -41,3 +43,7 @@ def provider_name(url: str) -> str:
     if host:
         return host
     return ""
+
+
+def is_supported_url(url: str) -> bool:
+    return provider_name(url) in _SUPPORTED_PROVIDERS

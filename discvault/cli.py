@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import datetime
 import signal
 import subprocess
 import sys
@@ -105,14 +104,12 @@ def _run_tui(args: argparse.Namespace, cfg: Config) -> None:
 
 def _run(args: argparse.Namespace, cfg: Config) -> None:
     from . import alerts
-    from . import artwork as artwork_mod
     from . import device as dev_mod
     from . import disc as disc_mod
     from . import library
-    from . import rip as rip_mod
-    from . import encode as enc_mod
-    from . import verify as verify_mod
     from .metadata import lookup as meta_lookup
+    from .metadata import urlimport
+    from .pipeline import BackupCallbacks, BackupRunError, BackupRunRequest, OutputSelection, run_backup
     from .ui.selector import select_candidate
 
     cleanup = Cleanup()
@@ -199,12 +196,18 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     # ------------------------------------------------------------------
     step("Fetching metadata")
     meta_debug = args.metadata_debug or args.debug
+    metadata_url = getattr(args, "metadata_url", "") or ""
+    if metadata_url and not urlimport.is_supported_url(metadata_url):
+        provider = urlimport.provider_name(metadata_url)
+        detail = provider or "unknown provider"
+        warn(f"Metadata URL import skipped: unsupported provider ({detail}).")
+        metadata_url = ""
     candidates = meta_lookup.fetch_candidates(
         disc_info,
         cfg,
         debug=meta_debug,
         metadata_file=args.metadata_file or "",
-        metadata_url=getattr(args, "metadata_url", "") or "",
+        metadata_url=metadata_url,
         manual_hints=(args.artist or "", args.album or "", args.year or ""),
     )
 
@@ -319,8 +322,20 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
             if album_root.exists():
                 warn(f"Album folder already exists (may be overwritten): {album_root}")
 
+    outputs = OutputSelection(
+        image=do_image,
+        iso=do_iso,
+        flac=do_flac,
+        mp3=do_mp3,
+        ogg=do_ogg,
+        opus=do_opus,
+        alac=do_alac,
+        aac=do_aac,
+        wav=do_wav,
+    )
+
     # ------------------------------------------------------------------
-    # 5. Paths
+    # 5. Paths / dry-run
     # ------------------------------------------------------------------
     album_root = library.album_root(cfg.base_dir, artist, album, year)
     img_dir = library.image_dir(album_root)
@@ -331,108 +346,19 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     al_dir = library.alac_dir(album_root)
     aa_dir = library.aac_dir(album_root)
     wa_dir = library.wav_dir(album_root)
-    album_root_existed = album_root.exists()
 
     log(f"Album folder: {album_root}")
 
     if args.dry_run:
-        _dry_run_summary(args, cfg, device, artist, album, year,
-                         meta, album_root, img_dir, fl_dir, mp_dir, og_dir, op_dir, al_dir, aa_dir, wa_dir,
-                         do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, selected_tracks)
+        _dry_run_summary(
+            args, cfg, device, artist, album, year,
+            meta, album_root, img_dir, fl_dir, mp_dir, og_dir, op_dir, al_dir, aa_dir, wa_dir,
+            do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, selected_tracks,
+        )
         return
 
     # ------------------------------------------------------------------
-    # 6. Work directory
-    # ------------------------------------------------------------------
-    work_dir = Path(cfg.work_dir)
-    work_dir_existed = work_dir.exists()
-    work_dir.mkdir(parents=True, exist_ok=True)
-    cleanup.track_dir(work_dir, created=not work_dir_existed)
-
-    # ------------------------------------------------------------------
-    # 7. Disc image
-    # ------------------------------------------------------------------
-    toc_path = cue_path = bin_path = iso_path = None
-    if do_image:
-        step("Creating disc image")
-        stem = library.image_stem(artist, album, year)
-        cleanup.track_dir(album_root, created=not album_root_existed)
-        img_dir_existed = img_dir.exists()
-        img_dir.mkdir(parents=True, exist_ok=True)
-        cleanup.track_dir(img_dir, created=not img_dir_existed)
-        stem = library.unique_image_stem(img_dir, stem)
-        toc_path = img_dir / f"{stem}.toc"
-        bin_path = img_dir / f"{stem}.bin"
-
-        ok = rip_mod.rip_image(
-            device, toc_path, bin_path, cleanup,
-            driver=cfg.cdrdao_driver, debug=args.debug,
-        )
-        if not ok:
-            cleanup.remove_all()
-            sys.exit(1)
-        cue_path = img_dir / f"{stem}.cue"
-        try:
-            rip_mod.write_cue_file(cue_path, bin_path, disc_info, toc_path=toc_path, cleanup=cleanup)
-            log(f"CUE sidecar saved: {cue_path.name}")
-        except OSError as exc:
-            error(f"Failed to write CUE sidecar: {exc}")
-            cleanup.remove_all()
-            sys.exit(1)
-
-        if do_iso:
-            step("Exporting ISO data image")
-            iso_path = img_dir / f"{stem}.iso"
-            exported_iso, detail = rip_mod.export_iso_from_bin(
-                iso_path,
-                bin_path,
-                disc_info,
-                toc_path=toc_path,
-                cleanup=cleanup,
-            )
-            if exported_iso is not None:
-                iso_path = exported_iso
-                log(f"ISO saved: {iso_path.name}")
-            else:
-                iso_path = None
-                warn(detail)
-
-    # ------------------------------------------------------------------
-    # 8. Rip audio
-    # ------------------------------------------------------------------
-    wav_files: list[Path] = []
-    if do_flac or do_mp3 or do_ogg or do_opus or do_alac or do_aac or do_wav:
-        step("Ripping audio tracks")
-        wav_files = rip_mod.rip_audio(
-            device,
-            work_dir,
-            disc_info.track_count,
-            cleanup,
-            debug=args.debug,
-            selected_tracks=selected_tracks,
-            sample_offset=cfg.cdparanoia_sample_offset,
-        )
-        if wav_files is None:
-            cleanup.remove_all()
-            sys.exit(1)
-
-        if cfg.accuraterip_enabled:
-            step("AccurateRip verification")
-            if cfg.cdparanoia_sample_offset == 0:
-                warn(
-                    "AccurateRip is enabled with sample offset 0. "
-                    "Verification is more meaningful when your drive offset is configured."
-                )
-            verified, detail = verify_mod.verify_accuraterip(wav_files, debug=args.debug)
-            if verified is True:
-                success(detail)
-            elif verified is False:
-                warn(detail)
-            else:
-                warn(detail)
-
-    # ------------------------------------------------------------------
-    # 9. Build Metadata object for encoding
+    # 6. Finalize metadata and run shared backup pipeline
     # ------------------------------------------------------------------
     if not meta:
         from .metadata.types import Metadata as MetaType
@@ -442,112 +368,34 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         meta.album = album
         meta.year = year
 
-    # ------------------------------------------------------------------
-    # 10. Encode
-    # ------------------------------------------------------------------
-    if do_flac or do_mp3 or do_ogg or do_opus or do_alac or do_aac or do_wav:
-        step("Encoding")
-        cleanup.track_dir(album_root, created=not album_root_existed)
-        if do_flac:
-            fl_dir_existed = fl_dir.exists()
-            fl_dir.mkdir(parents=True, exist_ok=True)
-            cleanup.track_dir(fl_dir, created=not fl_dir_existed)
-        if do_mp3:
-            mp_dir_existed = mp_dir.exists()
-            mp_dir.mkdir(parents=True, exist_ok=True)
-            cleanup.track_dir(mp_dir, created=not mp_dir_existed)
-        if do_ogg:
-            og_dir_existed = og_dir.exists()
-            og_dir.mkdir(parents=True, exist_ok=True)
-            cleanup.track_dir(og_dir, created=not og_dir_existed)
-        if do_opus:
-            op_dir_existed = op_dir.exists()
-            op_dir.mkdir(parents=True, exist_ok=True)
-            cleanup.track_dir(op_dir, created=not op_dir_existed)
-        if do_alac:
-            al_dir_existed = al_dir.exists()
-            al_dir.mkdir(parents=True, exist_ok=True)
-            cleanup.track_dir(al_dir, created=not al_dir_existed)
-        if do_aac:
-            aa_dir_existed = aa_dir.exists()
-            aa_dir.mkdir(parents=True, exist_ok=True)
-            cleanup.track_dir(aa_dir, created=not aa_dir_existed)
-        if do_wav:
-            wa_dir_existed = wa_dir.exists()
-            wa_dir.mkdir(parents=True, exist_ok=True)
-            cleanup.track_dir(wa_dir, created=not wa_dir_existed)
-
-        ok = enc_mod.encode_tracks(
-            wav_files,
-            meta,
-            flac_dir=fl_dir if do_flac else None,
-            mp3_dir=mp_dir if do_mp3 else None,
-            ogg_dir=og_dir if do_ogg else None,
-            opus_dir=op_dir if do_opus else None,
-            alac_dir=al_dir if do_alac else None,
-            aac_dir=aa_dir if do_aac else None,
-            wav_dir=wa_dir if do_wav else None,
-            flac_compression=args.flac_compression,
-            flac_verify=not args.no_verify,
-            mp3_quality=args.mp3_quality,
-            mp3_bitrate=args.mp3_bitrate,
-            opus_bitrate=cfg.opus_bitrate,
-            aac_bitrate=cfg.aac_bitrate,
-            cleanup=cleanup,
-            debug=args.debug,
-            track_total_hint=max(selected_tracks) if selected_tracks else None,
-        )
-        if not ok:
-            cleanup.remove_all()
-            sys.exit(1)
-    else:
-        log("Audio encoding disabled — disc image only.")
-
-    cover_art_path = None
-    if cfg.download_cover_art:
-        log(f"Cover art: {artwork_mod.describe_cover_art(meta, enabled=True)}")
-        cover_art_path = artwork_mod.download_cover_art(
-            meta,
-            album_root,
-            cleanup=cleanup,
-            timeout=cfg.metadata_timeout,
-            debug=args.debug,
-        )
-        if cover_art_path:
-            log(f"Cover art saved: {cover_art_path.name}")
-        else:
-            warn("Cover art not downloaded.")
-
-    # ------------------------------------------------------------------
-    # 11. backup-info.txt
-    # ------------------------------------------------------------------
-    _write_backup_info(
-        album_root, device, artist, album, year, meta.source,
-        wav_files, toc_path, cue_path, bin_path, iso_path,
-        do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, args, cfg, cleanup,
-        selected_tracks,
-        accuraterip_enabled=cfg.accuraterip_enabled,
-        cover_art_path=cover_art_path,
+    callbacks = BackupCallbacks(
+        info=log,
+        warn=warn,
+        success=success,
     )
+    try:
+        result = run_backup(
+            BackupRunRequest(
+                device=device,
+                disc_info=disc_info,
+                meta=meta,
+                artist=artist,
+                album=album,
+                year=year,
+                outputs=outputs,
+                selected_tracks=selected_tracks,
+                cfg=cfg,
+                args=args,
+                cleanup=cleanup,
+                cover_art_enabled=cfg.download_cover_art,
+            ),
+            callbacks,
+        )
+    except BackupRunError as exc:
+        cleanup.remove_all()
+        error(str(exc))
+        sys.exit(1)
 
-    # ------------------------------------------------------------------
-    # 12. Cleanup WAVs
-    # ------------------------------------------------------------------
-    if not cfg.keep_wav:
-        for w in wav_files:
-            w.unlink(missing_ok=True)
-        try:
-            work_dir.rmdir()
-        except OSError:
-            pass
-
-    # ------------------------------------------------------------------
-    # 13. Eject
-    # ------------------------------------------------------------------
-    if cfg.eject_after:
-        subprocess.run(["eject", device], capture_output=True)
-
-    cleanup.clear()
     sound_ok = alerts.play_completion_sound(cfg.completion_sound)
     notify_ok = alerts.send_desktop_notification(
         "DiscVault rip complete",
@@ -557,7 +405,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         warn("Completion sound unavailable.")
     if not notify_ok:
         warn("Desktop notifications unavailable.")
-    success(f"Done! Files saved to: {album_root}")
+    success(f"Done! Files saved to: {result.album_root}")
 
 
 # ---------------------------------------------------------------------------
@@ -717,77 +565,6 @@ def _dry_run_summary(
     console.print(f"  AccurateRip: {'yes' if cfg.accuraterip_enabled else 'no'}")
     console.print(f"  Cover art:   {'yes' if cfg.download_cover_art else 'no'}")
     console.print("\nDry-run: would execute the selected rip stages and write backup-info.txt")
-
-
-# ---------------------------------------------------------------------------
-# backup-info.txt
-# ---------------------------------------------------------------------------
-
-def _write_backup_info(
-    album_root: Path,
-    device: str,
-    artist: str,
-    album: str,
-    year: str,
-    meta_source: str,
-    wav_files: list[Path],
-    toc_path,
-    cue_path,
-    bin_path,
-    iso_path,
-    do_image: bool,
-    do_iso: bool,
-    do_flac: bool,
-    do_mp3: bool,
-    do_ogg: bool,
-    do_opus: bool,
-    do_alac: bool,
-    do_aac: bool,
-    do_wav: bool,
-    args,
-    cfg,
-    cleanup: Cleanup,
-    selected_tracks: list[int],
-    *,
-    accuraterip_enabled: bool,
-    cover_art_path: Path | None,
-) -> None:
-    info_path = album_root / "backup-info.txt"
-    cleanup.track_file(info_path)
-    lines = [
-        f"Backup timestamp: {datetime.datetime.now().astimezone().isoformat()}",
-        f"Device: {device}",
-        f"Artist: {artist}",
-        f"Album: {album}",
-    ]
-    if year:
-        lines.append(f"Year: {year}")
-    lines.append(f"Metadata source: {meta_source}")
-    lines.append(f"Track count: {len(wav_files) or len(selected_tracks)}")
-    lines.append(f"Selected tracks: {compact_track_list(selected_tracks)}")
-    if do_image and toc_path:
-        lines.append(f"Image TOC: {toc_path}")
-        lines.append(f"Image CUE: {cue_path}")
-        lines.append(f"Image BIN: {bin_path}")
-    lines.append(f"ISO export: {'yes' if do_iso else 'no'}")
-    if iso_path is not None:
-        lines.append(f"Image ISO: {iso_path}")
-    lines.append(f"FLAC: {'yes' if do_flac else 'no'}")
-    lines.append(f"MP3: {'yes' if do_mp3 else 'no'}")
-    lines.append(f"OGG: {'yes' if do_ogg else 'no'}")
-    lines.append(f"Opus: {'yes' if do_opus else 'no'}")
-    lines.append(f"ALAC: {'yes' if do_alac else 'no'}")
-    lines.append(f"AAC/M4A: {'yes' if do_aac else 'no'}")
-    lines.append(f"WAV copy: {'yes' if do_wav else 'no'}")
-    lines.append(f"AccurateRip: {'yes' if accuraterip_enabled else 'no'}")
-    lines.append(f"Sample offset: {cfg.cdparanoia_sample_offset}")
-    lines.append(f"Cover art enabled: {'yes' if cfg.download_cover_art else 'no'}")
-    if cover_art_path is not None:
-        lines.append(f"Cover art: {cover_art_path}")
-    try:
-        info_path.write_text("\n".join(lines) + "\n")
-    except OSError as exc:
-        warn(f"Could not write backup-info.txt: {exc}")
 
 
 # ---------------------------------------------------------------------------

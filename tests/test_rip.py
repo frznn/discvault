@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
+from discvault.cleanup import Cleanup
 from discvault.metadata.types import DiscInfo
-from discvault.rip import export_iso_from_bin, write_cue_file
+from discvault.rip import export_iso_from_bin, rip_image, write_cue_file
 
 
 class ImageExportTests(unittest.TestCase):
@@ -82,6 +85,39 @@ class ImageExportTests(unittest.TestCase):
 
         self.assertIsNone(exported_iso)
         self.assertIn("no data track", detail.lower())
+
+    def test_rip_image_requires_non_empty_bin_on_success(self) -> None:
+        class FakeProc:
+            def __init__(self, toc_path: Path, bin_path: Path) -> None:
+                self.stdout = StringIO("")
+                self.returncode = 0
+                toc_path.write_text("TOC")
+                bin_path.write_bytes(b"")
+
+            def wait(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            toc_path = tmp_path / "disc.toc"
+            bin_path = tmp_path / "disc.bin"
+            cleanup = Cleanup()
+
+            with patch("discvault.rip.log"), \
+                patch("discvault.rip.error"), \
+                patch(
+                    "discvault.rip.subprocess.Popen",
+                    side_effect=lambda *args, **kwargs: FakeProc(toc_path, bin_path),
+                ):
+                ok = rip_image(
+                    "/dev/cdrom",
+                    toc_path,
+                    bin_path,
+                    cleanup,
+                    driver="generic-mmc-raw",
+                )
+
+        self.assertFalse(ok)
 
 
 if __name__ == "__main__":
