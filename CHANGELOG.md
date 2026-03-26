@@ -6,6 +6,8 @@ The project history starts at `v0.1`.
 
 ## [Unreleased]
 
+## [0.2] - 2026-03-26
+
 ### Added
 - Shared backup pipeline used by both the CLI and the TUI.
 - Metadata import from local files and URL-based imports, including Bandcamp URL import.
@@ -17,6 +19,7 @@ The project history starts at `v0.1`.
 - Track editing and per-track selection in the TUI, including safer handling of mixed-mode discs and data tracks.
 - Desktop notifications and configurable completion sounds.
 - Project README.
+- Manual real-disc smoke test script for future hardware verification.
 
 ### Changed
 - Reworked the TUI layout and workflow around metadata search, imports, output selection, target handling, and progress reporting.
@@ -25,6 +28,7 @@ The project history starts at `v0.1`.
 - Made the CLI and TUI follow the same rip/encode/cover-art/cleanup flow through the shared pipeline.
 - Made configuration handling safer, including atomic saves and better normalization of invalid values.
 - Improved disc image handling with stricter success validation and better progress reporting.
+- Standardized the `0.2` release path around a green automated test suite plus real-drive smoke coverage.
 
 ### Fixed
 - Metadata re-fetch in the TUI now uses the current source selection instead of stale defaults.
@@ -35,6 +39,10 @@ The project history starts at `v0.1`.
 - Fixed stale target-label state when album/artist fields are cleared.
 - Fixed overwrite-risk handling by adding TUI confirmation before writing into an existing populated target directory.
 - Fixed completion alert handling so backend failures are detected instead of silently treated as success.
+- Fixed selected-track audio tagging so ripped subsets keep correct track totals.
+- Fixed `backup-info.txt` generation so it reflects the files actually created, including image-only runs.
+- Fixed rip and encode validation so empty or missing outputs are treated as failures instead of succeeding silently.
+- Fixed `readom` and `cdrdao` error handling so failures surface with clearer diagnostics and safer cleanup.
 
 ## [0.1] - 2026-03-16
 
