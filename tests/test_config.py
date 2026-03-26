@@ -42,7 +42,7 @@ class ConfigTests(unittest.TestCase):
                 cfg = config_mod.Config(
                     base_dir='music "special"',
                     work_dir="/tmp/discvault",
-                    cdrdao_driver="generic-mmc-raw",
+                    cdrdao_command=config_mod.DEFAULT_CDRDAO_COMMAND,
                 )
                 cfg.save()
                 loaded = config_mod.Config.load()

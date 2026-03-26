@@ -63,7 +63,7 @@ class CliPipelineTests(unittest.TestCase):
                 patch("discvault.device.is_readable", return_value=True), \
                 patch("discvault.disc.load_disc_info", return_value=disc_info), \
                 patch("discvault.metadata.lookup.fetch_candidates", return_value=[meta]), \
-                patch("discvault.rip.rip_image", return_value=True), \
+                patch("discvault.rip.rip_image", return_value=(True, "")), \
                 patch("discvault.rip.rip_audio") as rip_audio, \
                 patch("discvault.encode.encode_tracks") as encode_tracks, \
                 patch("discvault.artwork.download_cover_art", return_value=None), \

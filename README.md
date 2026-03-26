@@ -11,7 +11,7 @@ It can:
 - download album cover art
 - write a `backup-info.txt` manifest into the album folder
 
-The package version in this repo is `0.1.0`.
+The package version in this repo is `0.2.0`.
 
 ## Features
 
@@ -21,6 +21,7 @@ The package version in this repo is `0.1.0`.
 - Track selection, including mixed-mode discs with data tracks excluded by default
 - Editable album and track metadata in the TUI
 - Metadata lookup from:
+  - CD-Text read directly from the disc
   - local CDDB cache (`~/.cddb`)
   - MusicBrainz
   - GnuDB
@@ -53,6 +54,7 @@ python -m pip install -e .
 Core ripping and disc detection:
 
 - `cdrdao`
+- `readom` from `wodim` / `cdrtools` when you prefer the alternate image ripper
 - `cdparanoia`
 - one of `discid` or `cd-discid`
 
@@ -137,10 +139,11 @@ Provider order:
 
 1. Imported metadata file
 2. Imported metadata URL
-3. Local CDDB cache
-4. MusicBrainz
-5. GnuDB
-6. Discogs
+3. CD-Text
+4. Local CDDB cache
+5. MusicBrainz
+6. GnuDB
+7. Discogs
 
 Notes:
 
@@ -266,6 +269,7 @@ Notes:
 
 - `.iso` is only produced when the disc contains a supported data track layout
 - raw disc image output is the archival format; `.cue` is written alongside `.toc` for wider compatibility
+- when `readom` is selected as the image ripper, DiscVault still writes a `.bin` image and synthesizes a `.cue` sidecar
 
 ### backup-info.txt
 
@@ -273,17 +277,18 @@ Every successful rip writes a `backup-info.txt` manifest into the album root. Fi
 
 | Field | Description |
 | --- | --- |
-| `date` | Rip timestamp (ISO 8601) |
-| `artist` | Album artist |
-| `album` | Album title |
-| `year` | Album year (if known) |
-| `source` | Metadata provider name |
-| `device` | CD device used |
-| `tracks` | Comma-separated list of ripped track numbers |
-| `flac_compression` | FLAC compression level used |
-| `mp3_bitrate` | MP3 bitrate (0 = VBR) |
-| `accuraterip` | AccurateRip result summary (if enabled) |
-| `discvault_version` | DiscVault version that produced this rip |
+| `Backup timestamp` | Rip timestamp (ISO 8601) |
+| `DiscVault version` | DiscVault version that produced this rip |
+| `Device` | CD device used |
+| `Artist` / `Album` / `Year` | Final metadata written for the rip |
+| `Metadata source` | Metadata provider name |
+| `Disc track count` | Total tracks detected on the disc |
+| `Selected tracks` | Audio tracks chosen for extraction |
+| `Audio tracks written` | Number of WAV tracks actually ripped |
+| `Image BIN` / `Image CUE` / `Image TOC` / `Image ISO` | Paths for the image artifacts actually created |
+| `FLAC` / `MP3` / `OGG` / `Opus` / `ALAC` / `AAC/M4A` / `WAV copy` | Enabled output formats |
+| `AccurateRip result` | AccurateRip result summary (if enabled) |
+| `Cover art` | Saved cover-art path (if downloaded) |
 
 ## Configuration
 
@@ -299,11 +304,13 @@ Example:
 [discvault]
 base_dir = "/home/user/Music/Library"
 work_dir = "~/.cache/discvault/work"
-cdrdao_driver = "generic-mmc-raw"
+cdrdao_command = "cdrdao read-cd --device {device} --driver generic-mmc-raw -v 1 --read-raw --datafile {datafile} {toc}"
+image_ripper = "cdrdao"
 keep_wav = false
 eject_after = false
 metadata_timeout = 8
 cdparanoia_sample_offset = 0
+default_src_cdtext = true
 default_src_musicbrainz = true
 default_src_gnudb = false
 default_src_discogs = false
@@ -311,6 +318,7 @@ use_local_cddb_cache = true
 accuraterip_enabled = false
 download_cover_art = true
 completion_sound = "bell"
+progress_style = "spinner"
 opus_bitrate = 160
 aac_bitrate = 256
 
@@ -357,6 +365,32 @@ Supported URL imports:
 ## Verification and Cover Art
 
 AccurateRip:
+
+## Real-Drive Smoke Test
+
+For repeatable hardware validation, the repo now includes:
+
+```bash
+python tests/manual/real_disc_smoke.py
+```
+
+What it does:
+
+- runs a dry-run against the inserted disc
+- performs a small subset FLAC rip and verifies `TRACKNUMBER` / `TRACKTOTAL`
+- optionally tries an image-only `readom` run
+- performs an image-only `cdrdao` run and verifies the image artifacts plus no-eject behavior
+
+Useful options:
+
+```bash
+python tests/manual/real_disc_smoke.py --output-root /tmp/discvault-smoke
+python tests/manual/real_disc_smoke.py --skip-readom
+python tests/manual/real_disc_smoke.py --require-readom-success
+python tests/manual/real_disc_smoke.py --device /dev/sr0
+```
+
+The script writes only into a temporary output root and uses isolated HOME directories so it does not modify your normal DiscVault config.
 
 - optional
 - disabled by default

@@ -109,7 +109,7 @@ class ImageExportTests(unittest.TestCase):
                     "discvault.rip.subprocess.Popen",
                     side_effect=lambda *args, **kwargs: FakeProc(toc_path, bin_path),
                 ):
-                ok = rip_image(
+                ok, detail = rip_image(
                     "/dev/cdrom",
                     toc_path,
                     bin_path,
@@ -118,6 +118,7 @@ class ImageExportTests(unittest.TestCase):
                 )
 
         self.assertFalse(ok)
+        self.assertIn("exit=0", detail)
 
 
 if __name__ == "__main__":

@@ -64,6 +64,8 @@ def encode_tracks(
     total = len(wav_files) * sum(int(path is not None) for path in output_dirs)
     failed = False
     completed = 0
+    max_track_num = max((_track_num_from_wav(wav) for wav in wav_files), default=0)
+    resolved_track_total = max(track_total_hint or 0, max_track_num, len(wav_files))
 
     def _run_futures(on_complete):
         nonlocal failed, completed
@@ -71,7 +73,7 @@ def encode_tracks(
             futures = {}
             for wav in wav_files:
                 track_num = _track_num_from_wav(wav)
-                track_total = max(track_total_hint or len(wav_files), track_num, len(wav_files))
+                track_total = resolved_track_total
                 track_meta = meta.track(track_num)
                 track_title = track_meta.title if track_meta else ""
                 track_artist = track_meta.artist if track_meta else ""
@@ -237,10 +239,7 @@ def _encode_flac(
     if debug:
         console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 and debug:
-        console.print(f"[dim]{result.stderr}[/dim]")
-    return result.returncode == 0
+    return _run_encoder_command(cmd, out, debug)
 
 
 def _encode_mp3(
@@ -278,10 +277,7 @@ def _encode_mp3(
     if debug:
         console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 and debug:
-        console.print(f"[dim]{result.stderr}[/dim]")
-    return result.returncode == 0
+    return _run_encoder_command(cmd, out, debug)
 
 
 def _encode_ogg(
@@ -312,10 +308,7 @@ def _encode_ogg(
     if debug:
         console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 and debug:
-        console.print(f"[dim]{result.stderr}[/dim]")
-    return result.returncode == 0
+    return _run_encoder_command(cmd, out, debug)
 
 
 def _encode_opus(
@@ -355,10 +348,7 @@ def _encode_opus(
     if debug:
         console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 and debug:
-        console.print(f"[dim]{result.stderr}[/dim]")
-    return result.returncode == 0
+    return _run_encoder_command(cmd, out, debug)
 
 
 def _encode_alac(
@@ -454,15 +444,40 @@ def _encode_ffmpeg(
     if debug:
         console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 and debug:
-        console.print(f"[dim]{result.stderr}[/dim]")
-    return result.returncode == 0
+    return _run_encoder_command(cmd, out, debug)
 
 
 def _copy_wav(wav: Path, out: Path) -> bool:
     try:
         shutil.copy2(wav, out)
-        return True
+        return _is_nonempty_file(out)
+    except OSError:
+        return False
+
+
+def _run_encoder_command(cmd: list[str], out: Path, debug: bool) -> bool:
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as exc:
+        if debug:
+            console.print(f"[dim]{exc}[/dim]")
+        return False
+
+    if result.returncode != 0:
+        if debug and result.stderr:
+            console.print(f"[dim]{result.stderr}[/dim]")
+        return False
+
+    if not _is_nonempty_file(out):
+        if debug:
+            console.print(f"[dim]Encoder reported success but no output was written: {out}[/dim]")
+        return False
+
+    return True
+
+
+def _is_nonempty_file(path: Path) -> bool:
+    try:
+        return path.exists() and path.stat().st_size > 0
     except OSError:
         return False
