@@ -6,12 +6,12 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import wave
 from pathlib import Path
 
 
-_CHIME_PATH = Path(tempfile.gettempdir()) / "discvault-complete.wav"
+# Store the chime in ~/.cache/discvault/ so it is per-user and survives reboots.
+_CHIME_PATH = Path.home() / ".cache" / "discvault" / "complete.wav"
 
 
 def play_completion_sound(mode: str) -> bool:
@@ -90,6 +90,7 @@ def ensure_chime_file() -> Path:
         pause_frames = int(sample_rate * 0.03)
         frames.extend(b"\x00\x00" * pause_frames)
 
+    _CHIME_PATH.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(_CHIME_PATH), "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)

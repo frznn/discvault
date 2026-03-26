@@ -109,7 +109,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     from . import library
     from .metadata import lookup as meta_lookup
     from .metadata import urlimport
-    from .pipeline import BackupCallbacks, BackupRunError, BackupRunRequest, OutputSelection, run_backup
+    from .pipeline import BackupCallbacks, BackupRunError, BackupRunRequest, EncodeOptions, OutputSelection, run_backup
     from .ui.selector import select_candidate
 
     cleanup = Cleanup()
@@ -213,6 +213,8 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
 
     if not candidates:
         warn("No metadata found from any source.")
+        if sys.stdin.isatty():
+            warn("Tip: use --artist/--album/--year or --metadata-file to supply metadata manually.")
 
     # ------------------------------------------------------------------
     # 4. Selection + confirm loop
@@ -222,6 +224,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     artist = args.artist or ""
     album = args.album or ""
     year = args.year or ""
+    target_dir_override: Path | None = None
 
     while back_to_meta:
         back_to_meta = False
@@ -295,13 +298,14 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         # --- 4c. Confirm before starting ---
         if sys.stdin.isatty() and not args.dry_run:
             while True:
-                album_root = library.album_root(cfg.base_dir, artist, album, year)
-                action, do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav = _confirm_before_start(
+                album_root = target_dir_override or library.album_root(cfg.base_dir, artist, album, year)
+                action, do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, target_dir_override = _confirm_before_start(
                     artist, album, year,
                     meta.source if meta else "Manual",
                     album_root,
                     do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav,
                     args.flac_compression, args.mp3_bitrate, cfg.opus_bitrate, cfg.aac_bitrate,
+                    target_dir_override,
                 )
                 if action == "proceed":
                     break
@@ -313,12 +317,13 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
                         meta.year = year
                 elif action == "back":
                     back_to_meta = True
+                    target_dir_override = None
                     artist = args.artist or ""
                     album = args.album or ""
                     year = args.year or ""
                     break
         else:
-            album_root = library.album_root(cfg.base_dir, artist, album, year)
+            album_root = target_dir_override or library.album_root(cfg.base_dir, artist, album, year)
             if album_root.exists():
                 warn(f"Album folder already exists (may be overwritten): {album_root}")
 
@@ -337,7 +342,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     # ------------------------------------------------------------------
     # 5. Paths / dry-run
     # ------------------------------------------------------------------
-    album_root = library.album_root(cfg.base_dir, artist, album, year)
+    album_root = target_dir_override or library.album_root(cfg.base_dir, artist, album, year)
     img_dir = library.image_dir(album_root)
     fl_dir = library.flac_dir(album_root)
     mp_dir = library.mp3_dir(album_root)
@@ -373,6 +378,13 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         warn=warn,
         success=success,
     )
+    encode_opts = EncodeOptions(
+        flac_compression=args.flac_compression,
+        flac_verify=not args.no_verify,
+        mp3_quality=args.mp3_quality,
+        mp3_bitrate=args.mp3_bitrate,
+        debug=args.debug,
+    )
     try:
         result = run_backup(
             BackupRunRequest(
@@ -385,9 +397,10 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
                 outputs=outputs,
                 selected_tracks=selected_tracks,
                 cfg=cfg,
-                args=args,
+                encode_opts=encode_opts,
                 cleanup=cleanup,
                 cover_art_enabled=cfg.download_cover_art,
+                album_root_override=target_dir_override,
             ),
             callbacks,
         )
@@ -431,10 +444,11 @@ def _confirm_before_start(
     mp3_bitrate: int,
     opus_bitrate: int,
     aac_bitrate: int,
-) -> tuple[str, bool, bool, bool, bool, bool, bool, bool, bool, bool]:
+    target_dir_override: Path | None = None,
+) -> tuple[str, bool, bool, bool, bool, bool, bool, bool, bool, bool, Path | None]:
     """
     Show a pre-rip summary with toggleable outputs.
-    Returns (action, do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav).
+    Returns (action, do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, target_dir_override).
     action is one of: 'proceed', 'edit', 'back'.
     """
     while True:
@@ -447,7 +461,10 @@ def _confirm_before_start(
         if year:
             console.print(f"  Year:            {year}")
         console.print(f"  Metadata source: {meta_source}")
-        console.print(f"  Target folder:   {album_root}")
+        if target_dir_override:
+            console.print(f"  Target folder:   [bold]{album_root}[/bold] [dim](override)[/dim]")
+        else:
+            console.print(f"  Target folder:   {album_root}")
         if album_root.exists():
             warn("  Warning: this folder already exists — existing files may be overwritten.")
         console.print("\n  Outputs (1-9 to toggle):")
@@ -464,7 +481,7 @@ def _confirm_before_start(
 
         try:
             answer = console.input(
-                "\nProceed? [Y=yes, 1-9=toggle output, e=edit tags, b=back, q=quit]: "
+                "\nProceed? [Y=yes, 1-9=toggle output, d=change dir, e=edit tags, b=back, q=quit]: "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             sys.exit(0)
@@ -476,7 +493,7 @@ def _confirm_before_start(
             if not any((do_image, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav)):
                 warn("Nothing to do — enable at least one output.")
                 continue
-            return "proceed", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav
+            return "proceed", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, target_dir_override
         elif answer == "1":
             do_image = not do_image
         elif answer == "2":
@@ -495,15 +512,30 @@ def _confirm_before_start(
             do_aac = not do_aac
         elif answer == "9":
             do_wav = not do_wav
+        elif answer in ("d", "dir"):
+            try:
+                current = str(target_dir_override) if target_dir_override else ""
+                raw = console.input(
+                    f"  Target directory [{current or 'auto'}] (blank to reset): "
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                raw = ""
+            if raw:
+                target_dir_override = Path(raw).expanduser()
+                album_root = target_dir_override
+                log(f"Target directory set to: {target_dir_override}")
+            else:
+                target_dir_override = None
+                log("Target directory reset to auto.")
         elif answer in ("e", "edit"):
-            return "edit", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav
+            return "edit", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, target_dir_override
         elif answer in ("b", "back"):
-            return "back", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav
+            return "back", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, target_dir_override
         elif answer in ("q", "quit"):
             log("Aborted.")
             sys.exit(0)
         else:
-            console.print("[warning]Please enter Y, 1-9, e, b, or q.[/warning]")
+            console.print("[warning]Please enter Y, 1-9, d, e, b, or q.[/warning]")
 
 
 def _edit_tags(artist: str, album: str, year: str) -> tuple[str, str, str]:

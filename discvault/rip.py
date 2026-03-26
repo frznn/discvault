@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 import threading
 from pathlib import Path
@@ -31,27 +32,237 @@ _RAW_SECTOR_SIZE = 2352
 # Disc image (cdrdao)
 # ---------------------------------------------------------------------------
 
+def _collect_cdrdao_output(
+    proc: "subprocess.Popen[str]",
+    toc_path: Path,
+    bin_path: Path,
+    drv: str,
+    tried: list[str],
+    track_count: int,
+    track_offsets: list[int] | None,
+    leadout: int,
+    progress_callback: Callable | None,
+    debug: bool,
+) -> tuple[bool | None, str]:
+    """
+    Stream output from an already-started cdrdao process, parse progress, check result.
+    Returns (True, "") on success, (False, reason) on hard failure,
+    (None, "") when cdrdao signals a driver incompatibility (caller may retry).
+    """
+    if proc.stdout is None:
+        proc.kill()
+        return False, "cdrdao: failed to open stdout pipe"
+
+    output_chunks: list[str] = []
+    current_track = 0
+    last_track_reported = 0
+    last_progress_units = -1
+    last_progress_label = ""
+    progress_lock = threading.Lock()
+    stop_monitor = threading.Event()
+    start_frame = track_offsets[0] if track_offsets else 0
+    total_frames = max(leadout - start_frame, 1) if track_offsets and leadout > start_frame else 0
+
+    def _track_from_frames(frames_done: int) -> int:
+        if track_count <= 0 or not track_offsets:
+            return 0
+        absolute_frame = start_frame + max(frames_done, 0)
+        current = 1
+        for idx, start in enumerate(track_offsets, start=1):
+            if absolute_frame >= start:
+                current = idx
+            else:
+                break
+        return min(current, track_count)
+
+    def _emit_disc_progress(frames_done: int, label: str | None = None, *, final: bool = False) -> None:
+        nonlocal last_progress_units, last_progress_label, last_track_reported
+        if progress_callback is None or total_frames <= 0:
+            return
+        progress_limit = total_frames if final else max(total_frames - 1, 0)
+        frames_done = max(0, min(frames_done, progress_limit))
+        track_no = _track_from_frames(frames_done) or max(min(track_count, 1), last_track_reported)
+        total_tracks = max(track_count, track_no, 1)
+        if label is None:
+            label = f"Disc image: track {track_no}/{total_tracks}"
+        with progress_lock:
+            if frames_done < last_progress_units:
+                return
+            if frames_done == last_progress_units and label == last_progress_label:
+                return
+            last_progress_units = frames_done
+            last_progress_label = label
+            last_track_reported = max(last_track_reported, track_no)
+        progress_callback(frames_done, total_frames, label)
+
+    def _emit_track_progress(track_no: int, label: str | None = None, *, final: bool = False) -> None:
+        nonlocal last_track_reported
+        if progress_callback is None or track_no <= 0:
+            return
+        total_tracks = max(track_count, track_no, 1)
+        if label is None:
+            label = f"Disc image: track {track_no}/{total_tracks}"
+        if total_frames > 0 and track_offsets:
+            if final:
+                _emit_disc_progress(total_frames, label=label, final=True)
+            else:
+                track_index = min(max(track_no - 1, 0), len(track_offsets) - 1)
+                track_start = max(track_offsets[track_index] - start_frame, 0)
+                _emit_disc_progress(track_start, label=label)
+            return
+        with progress_lock:
+            if track_no <= last_track_reported:
+                return
+            last_track_reported = track_no
+        progress_callback(track_no, total_tracks, label)
+
+    def _monitor_image_file() -> None:
+        while not stop_monitor.wait(0.5):
+            if not bin_path.exists():
+                continue
+            frames_done = min(bin_path.stat().st_size // _RAW_SECTOR_SIZE, total_frames)
+            _emit_disc_progress(frames_done)
+
+    monitor_thread: threading.Thread | None = None
+    if progress_callback is not None and total_frames > 0:
+        monitor_thread = threading.Thread(target=_monitor_image_file, daemon=True)
+        monitor_thread.start()
+
+    def _handle_output(part: str) -> None:
+        nonlocal current_track
+        part = part.strip()
+        if not part:
+            return
+        if debug:
+            console.print(f"[dim]{part}[/dim]")
+        if progress_callback is None:
+            return
+        m = _CDRDAO_TRACK_RE.search(part)
+        if m:
+            current_track = int(m.group(1))
+            _emit_track_progress(current_track)
+            return
+        m = _CDRDAO_TRACK_LABEL_RE.search(part)
+        if m:
+            current_track = int(m.group(1))
+            _emit_track_progress(current_track)
+            return
+        if track_count <= 0:
+            m = _CDRDAO_READ_MB_RE.search(part)
+            if m:
+                current_mb = int(m.group(1))
+                total_mb = max(int(m.group(2)), 1)
+                progress_callback(min(current_mb, total_mb), total_mb, f"Disc image: {current_mb}/{total_mb} MB")
+                return
+            if current_track > 0:
+                m2 = _CDRDAO_PERCENT_RE.search(part)
+                if m2:
+                    pct = int(m2.group(1))
+                    progress_callback(min(pct, 100), 100, f"Disc image: track {current_track} ({pct}%)")
+
+    pending = ""
+    for ch in iter(lambda: proc.stdout.read(1), ""):
+        output_chunks.append(ch)
+        if ch in "\r\n":
+            _handle_output(pending)
+            pending = ""
+        else:
+            pending += ch
+    if pending:
+        _handle_output(pending)
+    proc.wait()
+    stop_monitor.set()
+    if monitor_thread is not None:
+        monitor_thread.join(timeout=1.0)
+
+    if progress_callback is not None and track_count > 0 and proc.returncode == 0:
+        _emit_track_progress(track_count, f"Disc image: track {track_count}/{track_count}", final=True)
+
+    stdout = "".join(output_chunks).strip()
+    if proc.returncode == 0 and toc_path.exists() and bin_path.exists() and bin_path.stat().st_size > 0:
+        log(f"cdrdao: disc image written ({bin_path.name})")
+        return True, ""
+    if "No driver found" in stdout or "Cannot open" in stdout:
+        return None, ""  # caller may retry with another driver
+    reason = f"cdrdao failed (driver={drv}, exit={proc.returncode})"
+    if len(tried) > 1:
+        reason = f"{reason}\nTried drivers: {', '.join(tried)}"
+    if stdout:
+        reason = f"{reason}\n\n{stdout}"
+    error(reason)
+    return False, reason
+
+
+def _launch_cdrdao(cmd: list[str]) -> "tuple[subprocess.Popen[str] | None, str]":
+    """Launch cdrdao subprocess. Returns (proc, "") or (None, error_reason)."""
+    try:
+        return subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        ), ""
+    except FileNotFoundError:
+        error("cdrdao not found. Please install cdrdao.")
+        return None, "cdrdao not found — please install cdrdao"
+
+
 def rip_image(
     device: str,
     toc_path: Path,
     bin_path: Path,
     cleanup: Cleanup,
+    command_template: str = "",
     driver: str = "",
+    read_raw: bool = True,
     debug: bool = False,
     process_callback: Callable | None = None,
     progress_callback: Callable | None = None,
     track_count: int = 0,
     track_offsets: list[int] | None = None,
     leadout: int = 0,
-) -> bool:
+) -> tuple[bool, str]:
     """
-    Rip a full disc image using cdrdao. Tries multiple drivers if needed.
-    process_callback(proc) is called with the Popen object when the process starts.
-    progress_callback(current, total, label) is called as progress is parsed.
-    Returns True on success.
+    Rip a full disc image using cdrdao.
+    If command_template is set it is used directly (placeholders: {device}, {datafile}, {toc}).
+    Otherwise the driver retry loop is used with the driver/read_raw flags.
+    Returns (True, "") on success, (False, reason) on failure.
     """
     cleanup.track_file(toc_path)
     cleanup.track_file(bin_path)
+
+    if command_template:
+        # Use shlex.split first, then substitute placeholders to preserve paths with spaces
+        try:
+            cmd_parts = shlex.split(command_template)
+        except ValueError as exc:
+            return False, f"Invalid cdrdao command template: {exc}"
+        subs = {"{device}": device, "{datafile}": str(bin_path), "{toc}": str(toc_path)}
+        cmd = []
+        for part in cmd_parts:
+            for placeholder, value in subs.items():
+                part = part.replace(placeholder, value)
+            cmd.append(part)
+        drv_match = re.search(r"--driver\s+(\S+)", command_template)
+        drv_label = drv_match.group(1) if drv_match else "custom"
+        log(f"cdrdao: running command (driver={drv_label})...")
+        if debug:
+            console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+        toc_path.unlink(missing_ok=True)
+        bin_path.unlink(missing_ok=True)
+        proc, err = _launch_cdrdao(cmd)
+        if proc is None:
+            return False, err
+        if process_callback:
+            process_callback(proc)
+        ok, detail = _collect_cdrdao_output(
+            proc, toc_path, bin_path, drv_label, [drv_label],
+            track_count, track_offsets, leadout, progress_callback, debug,
+        )
+        if ok is None:
+            return False, f"cdrdao command failed (device or disc not recognised, driver={drv_label})"
+        return ok, detail
 
     drivers_to_try: list[str] = []
     if driver:
@@ -64,216 +275,32 @@ def rip_image(
     for drv in drivers_to_try:
         tried.append(drv)
         log(f"cdrdao: trying driver '{drv}'...")
-        cmd = [
-            "cdrdao", "read-cd",
-            "--device", device,
-            "--driver", drv,
-            "-v", "1",
-            "--read-raw",
-            "--datafile", str(bin_path),
-            str(toc_path),
-        ]
+        cmd = ["cdrdao", "read-cd", "--device", device, "--driver", drv, "-v", "1"]
+        if read_raw:
+            cmd.append("--read-raw")
+        cmd += ["--datafile", str(bin_path), str(toc_path)]
         if debug:
             console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
-
         toc_path.unlink(missing_ok=True)
         bin_path.unlink(missing_ok=True)
-
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-        except FileNotFoundError:
-            error("cdrdao not found. Please install cdrdao.")
-            return False
-
+        proc, err = _launch_cdrdao(cmd)
+        if proc is None:
+            return False, err
         if process_callback:
             process_callback(proc)
+        ok, detail = _collect_cdrdao_output(
+            proc, toc_path, bin_path, drv, tried,
+            track_count, track_offsets, leadout, progress_callback, debug,
+        )
+        if ok is True:
+            return True, ""
+        if ok is False:
+            return False, detail
+        # ok is None → try next driver
 
-        # Stream output for progress parsing
-        output_chunks: list[str] = []
-        current_track = 0
-        last_track_reported = 0
-        last_progress_units = -1
-        last_progress_label = ""
-        progress_lock = threading.Lock()
-        stop_monitor = threading.Event()
-        start_frame = track_offsets[0] if track_offsets else 0
-        total_frames = max(leadout - start_frame, 1) if track_offsets and leadout > start_frame else 0
-        assert proc.stdout is not None
-
-        def _track_from_frames(frames_done: int) -> int:
-            if track_count <= 0 or not track_offsets:
-                return 0
-
-            absolute_frame = start_frame + max(frames_done, 0)
-            current = 1
-            for idx, start in enumerate(track_offsets, start=1):
-                if absolute_frame >= start:
-                    current = idx
-                else:
-                    break
-            return min(current, track_count)
-
-        def _emit_disc_progress(
-            frames_done: int,
-            label: str | None = None,
-            *,
-            final: bool = False,
-        ) -> None:
-            nonlocal last_progress_units, last_progress_label, last_track_reported
-            if progress_callback is None or total_frames <= 0:
-                return
-
-            progress_limit = total_frames if final else max(total_frames - 1, 0)
-            frames_done = max(0, min(frames_done, progress_limit))
-            track_no = _track_from_frames(frames_done) or max(min(track_count, 1), last_track_reported)
-            total_tracks = max(track_count, track_no, 1)
-            if label is None:
-                label = f"Disc image: track {track_no}/{total_tracks}"
-
-            with progress_lock:
-                if frames_done < last_progress_units:
-                    return
-                if frames_done == last_progress_units and label == last_progress_label:
-                    return
-                last_progress_units = frames_done
-                last_progress_label = label
-                last_track_reported = max(last_track_reported, track_no)
-
-            progress_callback(frames_done, total_frames, label)
-
-        def _emit_track_progress(
-            track_no: int,
-            label: str | None = None,
-            *,
-            final: bool = False,
-        ) -> None:
-            nonlocal last_track_reported
-            if progress_callback is None or track_no <= 0:
-                return
-            total_tracks = max(track_count, track_no, 1)
-            if label is None:
-                label = f"Disc image: track {track_no}/{total_tracks}"
-
-            if total_frames > 0 and track_offsets:
-                if final:
-                    _emit_disc_progress(total_frames, label=label, final=True)
-                else:
-                    track_index = min(max(track_no - 1, 0), len(track_offsets) - 1)
-                    track_start = max(track_offsets[track_index] - start_frame, 0)
-                    _emit_disc_progress(track_start, label=label)
-                return
-
-            with progress_lock:
-                if track_no < last_track_reported:
-                    return
-                if track_no == last_track_reported:
-                    return
-                last_track_reported = track_no
-            progress_callback(track_no, total_tracks, label)
-
-        def _monitor_image_file() -> None:
-            while not stop_monitor.wait(0.5):
-                if not bin_path.exists():
-                    continue
-                frames_done = min(bin_path.stat().st_size // _RAW_SECTOR_SIZE, total_frames)
-                _emit_disc_progress(frames_done)
-
-        monitor_thread: threading.Thread | None = None
-        if progress_callback is not None and total_frames > 0:
-            monitor_thread = threading.Thread(target=_monitor_image_file, daemon=True)
-            monitor_thread.start()
-
-        def _handle_output(part: str) -> None:
-            nonlocal current_track
-            part = part.strip()
-            if not part:
-                return
-            if debug:
-                console.print(f"[dim]{part}[/dim]")
-            if progress_callback is None:
-                return
-
-            m = _CDRDAO_TRACK_RE.search(part)
-            if m:
-                current_track = int(m.group(1))
-                _emit_track_progress(current_track)
-                return
-
-            m = _CDRDAO_TRACK_LABEL_RE.search(part)
-            if m:
-                current_track = int(m.group(1))
-                _emit_track_progress(current_track)
-                return
-
-            if track_count <= 0:
-                m = _CDRDAO_READ_MB_RE.search(part)
-                if m:
-                    current_mb = int(m.group(1))
-                    total_mb = max(int(m.group(2)), 1)
-                    progress_callback(
-                        min(current_mb, total_mb),
-                        total_mb,
-                        f"Disc image: {current_mb}/{total_mb} MB",
-                    )
-                    return
-
-                if current_track > 0:
-                    m2 = _CDRDAO_PERCENT_RE.search(part)
-                    if m2:
-                        pct = int(m2.group(1))
-                        total_units = 100
-                        progress_callback(
-                            min(pct, total_units),
-                            total_units,
-                            f"Disc image: track {current_track} ({pct}%)",
-                        )
-
-        pending = ""
-        for ch in iter(lambda: proc.stdout.read(1), ""):
-            output_chunks.append(ch)
-            if ch in "\r\n":
-                _handle_output(pending)
-                pending = ""
-            else:
-                pending += ch
-        if pending:
-            _handle_output(pending)
-        proc.wait()
-        stop_monitor.set()
-        if monitor_thread is not None:
-            monitor_thread.join(timeout=1.0)
-
-        if progress_callback is not None and track_count > 0 and proc.returncode == 0:
-            _emit_track_progress(
-                track_count,
-                f"Disc image: track {track_count}/{track_count}",
-                final=True,
-            )
-        stdout = "".join(output_chunks)
-
-        if (
-            proc.returncode == 0
-            and toc_path.exists()
-            and bin_path.exists()
-            and bin_path.stat().st_size > 0
-        ):
-            log(f"cdrdao: disc image written ({bin_path.name})")
-            return True
-
-        if "No driver found" in (stdout or "") or "Cannot open" in (stdout or ""):
-            continue
-        error(f"cdrdao failed (driver={drv}, exit={proc.returncode})")
-        error(f"Tried drivers: {', '.join(tried)}")
-        return False
-
-    error(f"cdrdao: no working driver found (tried: {', '.join(tried)})")
-    return False
+    reason = f"cdrdao: no working driver found (tried: {', '.join(tried)})"
+    error(reason)
+    return False, reason
 
 
 def write_cue_file(
@@ -302,6 +329,95 @@ def write_cue_file(
         cleanup.track_file(cue_path, created=not cue_path.exists())
     cue_path.write_text("\n".join(lines) + "\n")
     return True
+
+
+def rip_image_readom(
+    device: str,
+    bin_path: Path,
+    disc_info: "DiscInfo",
+    cleanup: Cleanup,
+    debug: bool = False,
+    process_callback: Callable | None = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
+) -> tuple[bool, str]:
+    """
+    Rip a disc image using readom. Produces a .bin file only (no .toc).
+    Returns (True, "") on success, (False, reason) on failure.
+    """
+    cleanup.track_file(bin_path)
+
+    cmd = ["readom", f"dev={device}", f"f={bin_path}"]
+    if debug:
+        console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+    log("readom: starting disc image rip...")
+    bin_path.unlink(missing_ok=True)
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError:
+        error("readom not found. Please install wodim/cdrtools.")
+        return False, "readom not found — please install wodim or cdrtools"
+
+    if process_callback:
+        process_callback(proc)
+
+    track_offsets = disc_info.track_offsets or []
+    leadout = disc_info.leadout or 0
+    start_frame = track_offsets[0] if track_offsets else 0
+    total_frames = max(leadout - start_frame, 1) if leadout > start_frame else 0
+    total_bytes = total_frames * _RAW_SECTOR_SIZE
+
+    stop_monitor = threading.Event()
+
+    def _monitor() -> None:
+        while not stop_monitor.wait(0.5):
+            if not bin_path.exists() or total_bytes <= 0 or progress_callback is None:
+                continue
+            done = min(bin_path.stat().st_size, total_bytes)
+            track_count = disc_info.track_count or 1
+            track_no = max(1, min(int(done / total_bytes * track_count) + 1, track_count))
+            progress_callback(done, total_bytes, f"Disc image: {done // (1024*1024)}/{total_bytes // (1024*1024)} MB")
+
+    monitor_thread: threading.Thread | None = None
+    if progress_callback is not None and total_bytes > 0:
+        monitor_thread = threading.Thread(target=_monitor, daemon=True)
+        monitor_thread.start()
+
+    output_lines: list[str] = []
+    if proc.stdout:
+        for line in proc.stdout:
+            line = line.rstrip()
+            if debug:
+                console.print(f"[dim]{line}[/dim]")
+            output_lines.append(line)
+    proc.wait()
+    stop_monitor.set()
+    if monitor_thread is not None:
+        monitor_thread.join(timeout=1.0)
+
+    if process_callback:
+        process_callback(None)
+
+    if proc.returncode == 0 and bin_path.exists() and bin_path.stat().st_size > 0:
+        log(f"readom: disc image written ({bin_path.name})")
+        return True, ""
+
+    stdout = "\n".join(output_lines).strip()
+    reason = f"readom failed (exit={proc.returncode})"
+    if "Permission denied" in stdout:
+        reason = f"readom failed: permission denied on {device}"
+    elif "No such file" in stdout:
+        reason = f"readom failed: device {device} not found"
+    if stdout:
+        reason = f"{reason}\n\n{stdout}"
+    error(reason)
+    return False, reason
 
 
 def export_iso_from_bin(
@@ -419,17 +535,17 @@ def rip_audio(
     process_callback: Callable | None = None,
     selected_tracks: list[int] | None = None,
     sample_offset: int = 0,
-) -> list[Path] | None:
+) -> tuple[list[Path] | None, str]:
     """
     Rip audio tracks to WAV files using cdparanoia batch mode.
     progress_callback(current, total, filename) is called as tracks are ripped.
     process_callback(proc) is called with the Popen object when started.
-    Returns sorted list of WAV paths, or None on failure.
+    Returns (list of WAV paths, "") on success, (None, reason) on failure.
     """
     selected_tracks = _normalize_selected_tracks(selected_tracks, track_count)
     if not selected_tracks:
         error("No audio tracks selected for ripping")
-        return None
+        return None, "No audio tracks selected for ripping"
 
     full_disc_tracks = list(range(1, track_count + 1))
     common_args = ["cdparanoia", "-d", device]
@@ -454,7 +570,7 @@ def rip_audio(
             )
         except FileNotFoundError:
             error("cdparanoia not found. Please install cdparanoia.")
-            return None
+            return None, "cdparanoia not found — please install cdparanoia"
 
         if process_callback:
             process_callback(proc)
@@ -464,7 +580,10 @@ def rip_audio(
 
         if progress_callback is not None:
             # TUI/callback mode: no rich Progress
-            assert proc.stdout is not None
+            if proc.stdout is None:
+                error("cdparanoia: failed to open stdout pipe.")
+                proc.kill()
+                return None, "cdparanoia: failed to open stdout pipe"
             for line in proc.stdout:
                 line = line.rstrip()
                 if debug:
@@ -487,7 +606,10 @@ def rip_audio(
             ) as progress:
                 task = progress.add_task("Ripping audio...", total=total_selected)
 
-                assert proc.stdout is not None
+                if proc.stdout is None:
+                    error("cdparanoia: failed to open stdout pipe.")
+                    proc.kill()
+                    return None, "cdparanoia: failed to open stdout pipe"
                 for line in proc.stdout:
                     line = line.rstrip()
                     if debug:
@@ -500,8 +622,9 @@ def rip_audio(
                 proc.wait()
 
         if proc.returncode != 0:
-            error(f"cdparanoia exited with code {proc.returncode}")
-            return None
+            reason = f"cdparanoia exited with code {proc.returncode}"
+            error(reason)
+            return None, reason
 
         wav_files = sorted(
             (work_dir / _wav_name_for_track(track_num, track_count) for track_num in selected_tracks),
@@ -546,13 +669,16 @@ def rip_audio(
                     )
                 except FileNotFoundError:
                     error("cdparanoia not found. Please install cdparanoia.")
-                    return None
+                    return None, "cdparanoia not found — please install cdparanoia"
 
                 if process_callback:
                     process_callback(proc)
 
                 started = False
-                assert proc.stdout is not None
+                if proc.stdout is None:
+                    error("cdparanoia: failed to open stdout pipe.")
+                    proc.kill()
+                    return None, "cdparanoia: failed to open stdout pipe"
                 for line in proc.stdout:
                     line = line.rstrip()
                     if debug:
@@ -572,8 +698,9 @@ def rip_audio(
                 proc.wait()
 
                 if proc.returncode != 0:
-                    error(f"cdparanoia exited with code {proc.returncode} on track {track_num}")
-                    return None
+                    reason = f"cdparanoia exited with code {proc.returncode} on track {track_num}"
+                    error(reason)
+                    return None, reason
 
                 if not started:
                     if progress_callback is not None:
@@ -593,13 +720,13 @@ def rip_audio(
 
     if not wav_files:
         error("cdparanoia produced no WAV files")
-        return None
+        return None, "cdparanoia produced no WAV files"
 
     for w in wav_files:
         cleanup.track_file(w, created=True)
 
     log(f"Ripped {len(wav_files)} track(s) to {work_dir}")
-    return wav_files
+    return wav_files, ""
 
 
 def _normalize_selected_tracks(selected_tracks: list[int] | None, track_count: int) -> list[int]:

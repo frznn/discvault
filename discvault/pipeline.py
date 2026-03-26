@@ -5,11 +5,14 @@ import datetime
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Callable
 
 from .cleanup import Cleanup
 from .metadata.types import DiscInfo, Metadata
 from .tracks import compact_track_list
+
+if TYPE_CHECKING:
+    from .config import Config
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,16 @@ class OutputSelection:
     wav: bool
 
 
+@dataclass(frozen=True)
+class EncodeOptions:
+    """Encoding parameters that were previously threaded through argparse Namespace."""
+    flac_compression: int = 8
+    flac_verify: bool = True
+    mp3_quality: int = 2
+    mp3_bitrate: int = 320
+    debug: bool = False
+
+
 @dataclass
 class BackupRunRequest:
     device: str
@@ -35,10 +48,12 @@ class BackupRunRequest:
     year: str
     outputs: OutputSelection
     selected_tracks: list[int]
-    cfg: Any
-    args: Any
+    cfg: "Config"
+    encode_opts: EncodeOptions
     cleanup: Cleanup
     cover_art_enabled: bool
+    # When set, overrides the auto-generated album_root path.
+    album_root_override: Path | None = None
 
 
 @dataclass
@@ -68,6 +83,11 @@ class BackupRunError(RuntimeError):
     """Raised when a shared pipeline stage fails."""
 
 
+# Prefix used in BackupRunError messages so the TUI can detect image rip failures
+# and offer to retry with the alternative tool.
+IMAGE_RIP_ERROR_PREFIX = "IMAGE_RIP:"
+
+
 def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = None) -> BackupRunResult:
     from . import artwork as artwork_mod
     from . import encode as enc_mod
@@ -77,13 +97,19 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
 
     callbacks = callbacks or BackupCallbacks()
     cfg = request.cfg
-    args = request.args
+    enc = request.encode_opts
     disc_info = request.disc_info
     cleanup = request.cleanup
     outputs = request.outputs
 
-    album_root = library.album_root(cfg.base_dir, request.artist, request.album, request.year)
+    if request.album_root_override is not None:
+        album_root = request.album_root_override
+    else:
+        album_root = library.album_root(cfg.base_dir, request.artist, request.album, request.year)
     album_root_existed = album_root.exists()
+    artist_dir = album_root.parent
+    if not artist_dir.exists():
+        cleanup.track_prune_dir(artist_dir)
     img_dir = library.image_dir(album_root)
     fl_dir = library.flac_dir(album_root)
     mp_dir = library.mp3_dir(album_root)
@@ -103,46 +129,72 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
     accuraterip_detail = ""
     cover_art_path = None
 
-    audio_formats = _audio_formats(outputs, cfg, args)
+    audio_formats = _audio_formats(outputs)
 
     # Disc image
     if outputs.image:
-        _info(callbacks, "Creating disc image...")
-        _stage_start(callbacks, "image", "Creating disc image (cdrdao)...", disc_info.track_count or None)
+        tool = cfg.image_ripper
+        tool_label = "readom" if tool == "readom" else "cdrdao"
+        _info(callbacks, f"Creating disc image ({tool_label})...")
+        _stage_start(callbacks, "image", f"Creating disc image ({tool_label})...", disc_info.track_count or None)
         stem = library.image_stem(request.artist, request.album, request.year)
         cleanup.track_dir(album_root, created=not album_root_existed)
         img_dir_existed = img_dir.exists()
         img_dir.mkdir(parents=True, exist_ok=True)
         cleanup.track_dir(img_dir, created=not img_dir_existed)
         stem = library.unique_image_stem(img_dir, stem)
-        toc_path = img_dir / f"{stem}.toc"
         bin_path = img_dir / f"{stem}.bin"
 
-        ok = rip_mod.rip_image(
-            request.device,
-            toc_path,
-            bin_path,
-            cleanup,
-            driver=cfg.cdrdao_driver,
-            debug=args.debug,
-            process_callback=lambda proc: _set_process(callbacks, proc),
-            progress_callback=_progress_callback(callbacks, "image"),
-            track_count=disc_info.track_count,
-            track_offsets=disc_info.track_offsets,
-            leadout=disc_info.leadout,
-        )
+        if tool == "readom":
+            toc_path = None
+            ok, rip_detail = rip_mod.rip_image_readom(
+                request.device,
+                bin_path,
+                disc_info,
+                cleanup,
+                debug=enc.debug,
+                process_callback=lambda proc: _set_process(callbacks, proc),
+                progress_callback=_progress_callback(callbacks, "image"),
+            )
+        else:
+            toc_path = img_dir / f"{stem}.toc"
+            ok, rip_detail = rip_mod.rip_image(
+                request.device,
+                toc_path,
+                bin_path,
+                cleanup,
+                command_template=cfg.cdrdao_command,
+                debug=enc.debug,
+                process_callback=lambda proc: _set_process(callbacks, proc),
+                progress_callback=_progress_callback(callbacks, "image"),
+                track_count=disc_info.track_count,
+                track_offsets=disc_info.track_offsets,
+                leadout=disc_info.leadout,
+            )
         _set_process(callbacks, None)
         if not ok:
-            raise BackupRunError("Disc image failed.")
+            msg = f"Disc image failed ({tool_label}): {rip_detail}" if rip_detail else f"Disc image failed ({tool_label})"
+            raise BackupRunError(f"{IMAGE_RIP_ERROR_PREFIX}{msg}")
         _success(callbacks, "Disc image created.")
         _stage_done(callbacks, "image", "✓ Disc image")
 
-        cue_path = img_dir / f"{stem}.cue"
-        try:
-            rip_mod.write_cue_file(cue_path, bin_path, disc_info, toc_path=toc_path, cleanup=cleanup)
-        except OSError as exc:
-            raise BackupRunError(f"Failed to write CUE sidecar: {exc}") from exc
-        _success(callbacks, f"CUE sidecar saved: {cue_path.name}")
+        if toc_path is not None:
+            cue_path = img_dir / f"{stem}.cue"
+            try:
+                rip_mod.write_cue_file(cue_path, bin_path, disc_info, toc_path=toc_path, cleanup=cleanup)
+            except OSError as exc:
+                raise BackupRunError(f"Failed to write CUE sidecar: {exc}") from exc
+            _success(callbacks, f"CUE sidecar saved: {cue_path.name}")
+        else:
+            # readom: synthesize CUE from disc_info (no .toc available)
+            cue_path = img_dir / f"{stem}.cue"
+            try:
+                rip_mod.write_cue_file(cue_path, bin_path, disc_info, toc_path=None, cleanup=cleanup)
+            except OSError as exc:
+                _warn(callbacks, f"Could not write CUE sidecar: {exc}")
+                cue_path = None
+            else:
+                _success(callbacks, f"CUE sidecar saved: {cue_path.name}")
 
         if outputs.iso:
             _info(callbacks, "Exporting ISO data image...")
@@ -169,12 +221,12 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
     if audio_formats:
         _info(callbacks, "Ripping audio tracks...")
         _stage_start(callbacks, "rip", "Ripping audio tracks...", len(request.selected_tracks) or None)
-        wav_files = rip_mod.rip_audio(
+        wav_files, rip_detail = rip_mod.rip_audio(
             request.device,
             work_dir,
             disc_info.track_count,
             cleanup,
-            debug=args.debug,
+            debug=enc.debug,
             progress_callback=_audio_progress_callback(callbacks),
             process_callback=lambda proc: _set_process(callbacks, proc),
             selected_tracks=request.selected_tracks,
@@ -182,7 +234,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
         )
         _set_process(callbacks, None)
         if wav_files is None:
-            raise BackupRunError("Failed to rip audio tracks.")
+            raise BackupRunError(f"Audio track extraction failed: {rip_detail}" if rip_detail else "Failed to rip audio tracks")
         _success(callbacks, "Audio tracks ripped.")
         _stage_done(callbacks, "rip", "✓ Audio tracks")
 
@@ -193,7 +245,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
                     callbacks,
                     "AccurateRip is enabled with sample offset 0. Set your drive offset for more reliable results.",
                 )
-            verified, detail = verify_mod.verify_accuraterip(wav_files, debug=args.debug)
+            verified, detail = verify_mod.verify_accuraterip(wav_files, debug=enc.debug)
             accuraterip_detail = detail
             if verified is True:
                 _success(callbacks, detail)
@@ -221,16 +273,17 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
                 alac_dir=al_dir if fmt_key == "alac" else None,
                 aac_dir=aa_dir if fmt_key == "aac" else None,
                 wav_dir=wa_dir if fmt_key == "wav" else None,
-                flac_compression=args.flac_compression,
-                flac_verify=not args.no_verify,
-                mp3_quality=args.mp3_quality,
-                mp3_bitrate=args.mp3_bitrate,
+                flac_compression=enc.flac_compression,
+                flac_verify=enc.flac_verify,
+                mp3_quality=enc.mp3_quality,
+                mp3_bitrate=enc.mp3_bitrate,
                 opus_bitrate=cfg.opus_bitrate,
                 aac_bitrate=cfg.aac_bitrate,
                 cleanup=cleanup,
-                debug=args.debug,
+                debug=enc.debug,
                 progress_callback=_encode_progress_callback(callbacks, fmt_key, stage_label),
-                track_total_hint=max(request.selected_tracks) if request.selected_tracks else None,
+                # len() gives the actual number of tracks being encoded, not the highest track number
+                track_total_hint=len(request.selected_tracks) if request.selected_tracks else None,
             )
             if not ok:
                 raise BackupRunError(f"Encoding to {fmt_name} format failed.")
@@ -245,7 +298,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
             album_root,
             cleanup=cleanup,
             timeout=cfg.metadata_timeout,
-            debug=args.debug,
+            debug=enc.debug,
         )
         if cover_art_path is not None:
             _success(callbacks, f"Cover art saved: {cover_art_path.name}")
@@ -266,7 +319,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
         bin_path=bin_path,
         iso_path=iso_path,
         outputs=outputs,
-        args=args,
+        encode_opts=enc,
         cfg=cfg,
         cleanup=cleanup,
         selected_tracks=request.selected_tracks,
@@ -316,8 +369,8 @@ def write_backup_info(
     bin_path: Path | None,
     iso_path: Path | None,
     outputs: OutputSelection,
-    args: Any,
-    cfg: Any,
+    encode_opts: EncodeOptions,
+    cfg: "Config",
     cleanup: Cleanup,
     selected_tracks: list[int],
     accuraterip_enabled: bool,
@@ -360,8 +413,8 @@ def write_backup_info(
     lines.append(f"Cover art enabled: {'yes' if cover_art_enabled else 'no'}")
     if cover_art_path is not None:
         lines.append(f"Cover art: {cover_art_path}")
-    lines.append(f"FLAC compression: {args.flac_compression}")
-    mp3_desc = f"{args.mp3_bitrate} kbps" if args.mp3_bitrate > 0 else "VBR"
+    lines.append(f"FLAC compression: {encode_opts.flac_compression}")
+    mp3_desc = f"{encode_opts.mp3_bitrate} kbps" if encode_opts.mp3_bitrate > 0 else "VBR"
     lines.append(f"MP3 bitrate: {mp3_desc}")
     lines.append(f"Opus bitrate: {cfg.opus_bitrate}")
     lines.append(f"AAC bitrate: {cfg.aac_bitrate}")
@@ -371,7 +424,7 @@ def write_backup_info(
         _warn_raw(warn, f"Could not write backup-info.txt: {exc}")
 
 
-def _audio_formats(outputs: OutputSelection, cfg: Any, args: Any) -> list[tuple[str, str]]:
+def _audio_formats(outputs: OutputSelection) -> list[tuple[str, str]]:
     formats: list[tuple[str, str]] = []
     if outputs.flac:
         formats.append(("flac", "FLAC"))
@@ -437,7 +490,9 @@ def _audio_progress_callback(callbacks: BackupCallbacks) -> Callable[[int, int, 
         label = f"Ripping audio tracks ({current}/{total})"
         if fname:
             label = f"{label}: {fname}"
-        callbacks.stage_progress("rip", current, max(total, 1), label)
+        # Report tracks *completed* (current - 1) so the bar only reaches 100%
+        # when stage_done fires, not while the last track is still being ripped.
+        callbacks.stage_progress("rip", current - 1, max(total, 1), label)
 
     return _callback
 

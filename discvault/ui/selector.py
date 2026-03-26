@@ -47,9 +47,15 @@ def _terminal_select(candidates: list[Metadata], disc_info=None) -> Metadata | N
         _print_candidate_preview(idx, count, candidates[idx], disc_info)
 
         if count > 1:
-            prompt = f"\nUse this? [Y=use, n=next, p=prev, l=list, m=manual, q=quit, 1-{count}=select]: "
+            console.print(
+                "\n  [dim]Y[/dim]=use  [dim]n[/dim]=next  [dim]p[/dim]=prev  "
+                "[dim]l[/dim]=list  [dim]m[/dim]=manual entry  "
+                f"[dim]1-{count}[/dim]=pick  [dim]q[/dim]=quit"
+            )
+            prompt = "Choice [Y/n/p/l/m/q]: "
         else:
-            prompt = "\nUse this? [Y=use, m=manual, q=quit]: "
+            console.print("\n  [dim]Y[/dim]=use  [dim]m[/dim]=manual entry  [dim]q[/dim]=quit")
+            prompt = "Choice [Y/m/q]: "
 
         try:
             answer = console.input(prompt).strip().lower()
@@ -86,11 +92,13 @@ def _terminal_select(candidates: list[Metadata], disc_info=None) -> Metadata | N
             return None
         elif answer in ("q", "quit"):
             console.print("Aborted.")
-            sys.exit(0)
+            # Raise SystemExit so Python atexit handlers and context managers run.
+            # No files have been created at this stage, so cleanup is a no-op.
+            raise SystemExit(0)
         elif answer.isdigit() and 1 <= int(answer) <= count:
             idx = int(answer) - 1
         else:
-            console.print(f"[warning]Invalid choice: {answer}[/warning]")
+            console.print(f"[warning]Invalid choice: {answer!r}[/warning]")
 
 
 def _print_candidate_preview(
@@ -140,13 +148,14 @@ def _print_candidate_list(candidates: list[Metadata]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Textual TUI
+# Textual TUI selector (used when --tui flag passed; rarely invoked directly)
 # ---------------------------------------------------------------------------
 
 def _tui_select(candidates: list[Metadata]) -> Metadata | None:
     from textual.app import App, ComposeResult
-    from textual.widgets import DataTable, Footer, Header, Label
+    from textual.widgets import DataTable, Footer, Header, Label, Static
     from textual.binding import Binding
+    from textual.containers import Vertical
 
     result: list[Metadata | None] = [None]
 
@@ -156,19 +165,21 @@ def _tui_select(candidates: list[Metadata]) -> Metadata | None:
             Binding("escape,q", "quit_no_select", "Skip"),
         ]
         CSS = """
-        Screen { align: center middle; }
+        Screen { layout: vertical; }
         DataTable { height: 1fr; }
-        Label { margin: 1 0; }
+        #detail { height: auto; min-height: 4; padding: 1; border-top: solid $surface; color: $text-muted; }
+        Label { margin: 1 0 0 0; }
         """
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=False)
             yield Label("Select metadata — Enter to confirm, Esc to skip")
-            yield DataTable()
+            yield DataTable(id="table")
+            yield Static("", id="detail", markup=True)
             yield Footer()
 
         def on_mount(self) -> None:
-            table = self.query_one(DataTable)
+            table = self.query_one("#table", DataTable)
             table.add_columns("Source", "Artist", "Album", "Year", "Tracks")
             for m in candidates:
                 table.add_row(
@@ -180,8 +191,20 @@ def _tui_select(candidates: list[Metadata]) -> Metadata | None:
                 )
             table.focus()
 
+        def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+            idx = event.cursor_row
+            if 0 <= idx < len(candidates):
+                m = candidates[idx]
+                lines = []
+                for t in (m.tracks or [])[:12]:
+                    artist_part = f" — {t.artist}" if t.artist and t.artist != m.album_artist else ""
+                    lines.append(f"  {t.number:02d}. {t.title}{artist_part}")
+                if len(m.tracks or []) > 12:
+                    lines.append(f"  … and {len(m.tracks) - 12} more")
+                self.query_one("#detail", Static).update("\n".join(lines) if lines else "(no track info)")
+
         def action_confirm(self) -> None:
-            table = self.query_one(DataTable)
+            table = self.query_one("#table", DataTable)
             row_idx = table.cursor_row
             if 0 <= row_idx < len(candidates):
                 result[0] = candidates[row_idx]

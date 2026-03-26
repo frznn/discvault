@@ -55,9 +55,9 @@ class SourceSelectScreen(ModalScreen[dict[str, bool] | None]):
         yield Vertical(
             Label("Search Metadata", id="source-title"),
             Vertical(
+                Checkbox("CD-Text (from disc)", value=self._sources.get("cdtext", True), id="src-cdtext", compact=True, classes="source-check"),
                 Checkbox("MusicBrainz", value=self._sources.get("musicbrainz", True), id="src-musicbrainz", compact=True, classes="source-check"),
                 Checkbox("GnuDB", value=self._sources.get("gnudb", False), id="src-gnudb", compact=True, classes="source-check"),
-                Checkbox("CD-Text", value=self._sources.get("cdtext", False), id="src-cdtext", compact=True, classes="source-check"),
                 Checkbox("Discogs", value=self._sources.get("discogs", False), id="src-discogs", compact=True, classes="source-check"),
                 id="source-list",
             ),
@@ -70,7 +70,7 @@ class SourceSelectScreen(ModalScreen[dict[str, bool] | None]):
         )
 
     def on_mount(self) -> None:
-        self.query_one("#src-musicbrainz", Checkbox).focus()
+        self.query_one("#src-cdtext", Checkbox).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "source-cancel":
@@ -81,8 +81,8 @@ class SourceSelectScreen(ModalScreen[dict[str, bool] | None]):
 
     def _selected_sources(self) -> dict[str, bool]:
         return {
+            "cdtext": self.query_one("#src-cdtext", Checkbox).value,
             "musicbrainz": self.query_one("#src-musicbrainz", Checkbox).value,
             "gnudb": self.query_one("#src-gnudb", Checkbox).value,
-            "cdtext": self.query_one("#src-cdtext", Checkbox).value,
             "discogs": self.query_one("#src-discogs", Checkbox).value,
         }

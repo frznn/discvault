@@ -202,6 +202,7 @@ def _parse_cdrdao_toc(text: str) -> Metadata | None:
         album=album,
         year="",
         tracks=tracks,
+        match_quality="cdtext",
     )
 
 
@@ -254,6 +255,7 @@ def _parse_cdinfo_output(text: str) -> Metadata | None:
         album=album,
         year="",
         tracks=tracks,
+        match_quality="cdtext",
     )
 
 

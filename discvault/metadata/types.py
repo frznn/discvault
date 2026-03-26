@@ -21,6 +21,7 @@ class Metadata:
     mb_release_id: str = ""
     mb_release_group_id: str = ""
     discogs_release_id: int = 0
+    match_quality: str = ""  # disc_id | toc | search | cdtext | manual | (empty for unknown)
 
     def track(self, number: int) -> Track | None:
         for t in self.tracks:

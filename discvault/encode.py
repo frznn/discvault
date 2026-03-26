@@ -1,6 +1,7 @@
 """FLAC and MP3 encoding with parallel per-track execution."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -66,7 +67,7 @@ def encode_tracks(
 
     def _run_futures(on_complete):
         nonlocal failed, completed
-        with ThreadPoolExecutor() as pool:
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
             futures = {}
             for wav in wav_files:
                 track_num = _track_num_from_wav(wav)
