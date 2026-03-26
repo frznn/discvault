@@ -24,7 +24,6 @@ The package version in this repo is `0.1.0`.
   - local CDDB cache (`~/.cddb`)
   - MusicBrainz
   - GnuDB
-  - CD-Text
   - Discogs
   - imported metadata files (`.cue`, `.toc`, `.json`, `.toml`)
   - imported metadata URLs (currently Bandcamp album URLs)
@@ -59,7 +58,7 @@ Core ripping and disc detection:
 
 Useful metadata helpers:
 
-- `cd-info` for track mode / CD-Text probing
+- `cd-info` for track mode probing
 
 Optional encoders:
 
@@ -75,6 +74,28 @@ Optional extras:
 - `notify-send` for desktop notifications
 - `pw-play`, `paplay`, `aplay`, or `canberra-gtk-play` for completion sounds
 - `arver` or `trackverify` for AccurateRip verification
+
+### Installing system dependencies
+
+**Debian/Ubuntu:**
+
+```bash
+sudo apt install cdrdao cdparanoia discid cd-info flac lame vorbis-tools opus-tools ffmpeg eject libnotify-bin
+```
+
+**Arch Linux:**
+
+```bash
+sudo pacman -S cdrdao cdparanoia libdiscid libcdio flac lame vorbis-tools opus-tools ffmpeg eject libnotify
+```
+
+**Fedora/RHEL:**
+
+```bash
+sudo dnf install cdrdao cdparanoia libdiscid cd-discid flac lame vorbis-tools opus-tools ffmpeg eject libnotify
+```
+
+For `discid` / `cd-discid` fallback, install whichever is available for your distribution.
 
 ## Quick Start
 
@@ -110,7 +131,6 @@ The app reads disc information from the drive and uses:
 
 - MusicBrainz disc ID / TOC
 - FreeDB / GnuDB-style disc ID and offsets
-- CD-Text when present
 - manual `Artist` / `Album` / `Year` hints for text search and imports
 
 Provider order:
@@ -120,8 +140,7 @@ Provider order:
 3. Local CDDB cache
 4. MusicBrainz
 5. GnuDB
-6. CD-Text
-7. Discogs
+6. Discogs
 
 Notes:
 
@@ -139,9 +158,22 @@ Main behaviors:
 - `Import from File` imports `.cue`, `.toc`, `.json`, or `.toml`
 - `Import from URL` imports from supported sites, currently Bandcamp album URLs
 - `Select Outputs` controls which image and audio formats will be produced
+- the target directory path is editable directly in the path field
 - tracks are editable and selectable before starting
 - `Download Cover Art` is only selectable when the chosen metadata has artwork available
 - the app can detect disc removal/ejection and return to a waiting state
+
+### TUI Keyboard Reference
+
+| Key | Action |
+| --- | ------ |
+| `Enter` / `Start` | Begin ripping when ready |
+| `Escape` | Cancel running rip (with confirm) / quit from idle |
+| `Ctrl+C` | Force quit |
+| `F5` | Re-fetch metadata |
+| `Ctrl+,` | Open settings |
+| `Ctrl+K` | Command palette |
+| `?` | Help screen |
 
 ## CLI Options
 
@@ -235,6 +267,24 @@ Notes:
 - `.iso` is only produced when the disc contains a supported data track layout
 - raw disc image output is the archival format; `.cue` is written alongside `.toc` for wider compatibility
 
+### backup-info.txt
+
+Every successful rip writes a `backup-info.txt` manifest into the album root. Fields:
+
+| Field | Description |
+| --- | --- |
+| `date` | Rip timestamp (ISO 8601) |
+| `artist` | Album artist |
+| `album` | Album title |
+| `year` | Album year (if known) |
+| `source` | Metadata provider name |
+| `device` | CD device used |
+| `tracks` | Comma-separated list of ripped track numbers |
+| `flac_compression` | FLAC compression level used |
+| `mp3_bitrate` | MP3 bitrate (0 = VBR) |
+| `accuraterip` | AccurateRip result summary (if enabled) |
+| `discvault_version` | DiscVault version that produced this rip |
+
 ## Configuration
 
 Config file:
@@ -248,13 +298,15 @@ Example:
 ```toml
 [discvault]
 base_dir = "/home/user/Music/Library"
-work_dir = "/tmp/discvault"
+work_dir = "~/.cache/discvault/work"
 cdrdao_driver = "generic-mmc-raw"
 keep_wav = false
 eject_after = false
 metadata_timeout = 8
 cdparanoia_sample_offset = 0
-preferred_metadata_source = "musicbrainz"
+default_src_musicbrainz = true
+default_src_gnudb = false
+default_src_discogs = false
 use_local_cddb_cache = true
 accuraterip_enabled = false
 download_cover_art = true
