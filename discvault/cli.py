@@ -158,7 +158,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     # ------------------------------------------------------------------
     step("Reading disc TOC")
     try:
-        disc_info = disc_mod.load_disc_info(device)
+        disc_info = disc_mod.load_disc_info(device, debug=args.debug)
     except Exception as exc:
         if args.dry_run:
             log("Dry-run: disc read skipped.")
@@ -702,6 +702,6 @@ def _parse_args() -> argparse.Namespace:
                    help="Show what would be done without accessing the disc")
     p.add_argument("--debug", action="store_true",
                    help="Print subprocess commands and verbose output")
-    p.add_argument("--version", action="version", version="discvault 0.1.0")
+    p.add_argument("--version", action="version", version="discvault 0.2.0")
 
     return p.parse_args()

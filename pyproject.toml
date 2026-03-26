@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "discvault"
-version = "0.1.0"
+version = "0.2.0"
 description = "CD archiver — disc image backup, audio rip, FLAC + MP3 encode, metadata lookup"
 requires-python = ">=3.10"
 dependencies = [

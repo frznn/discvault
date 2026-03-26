@@ -2,6 +2,7 @@
 from __future__ import annotations
 import copy
 import json
+import shlex
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -68,6 +69,14 @@ class Config:
     aac_bitrate: int = 256
     gnudb: GnudbConfig = field(default_factory=GnudbConfig)
     discogs: DiscogsConfig = field(default_factory=DiscogsConfig)
+
+    @property
+    def cdrdao_driver(self) -> str:
+        return _extract_cdrdao_driver(self.cdrdao_command)
+
+    @cdrdao_driver.setter
+    def cdrdao_driver(self, driver: str) -> None:
+        self.cdrdao_command = _with_cdrdao_driver(self.cdrdao_command, driver)
 
     @classmethod
     def load(cls) -> "Config":
@@ -285,6 +294,44 @@ def _normalize_completion_sound(value: str) -> str:
     if lowered in {"bell", "chime", "both", "off"}:
         return lowered
     return "bell"
+
+
+def _extract_cdrdao_driver(command: str) -> str:
+    for index, part in enumerate(_split_cdrdao_command(command)):
+        if part == "--driver" and index + 1 < len(_split_cdrdao_command(command)):
+            return _split_cdrdao_command(command)[index + 1]
+    return "generic-mmc-raw"
+
+
+def _with_cdrdao_driver(command: str, driver: str) -> str:
+    parts = _split_cdrdao_command(command)
+    if not parts:
+        parts = _split_cdrdao_command(DEFAULT_CDRDAO_COMMAND)
+
+    cleaned: list[str] = []
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part == "--driver":
+            index += 2
+            continue
+        cleaned.append(part)
+        index += 1
+
+    driver_arg = driver.strip() or "generic-mmc-raw"
+    insert_at = len(cleaned)
+    if "--device" in cleaned:
+        device_index = cleaned.index("--device")
+        insert_at = min(device_index + 2, len(cleaned))
+    cleaned[insert_at:insert_at] = ["--driver", driver_arg]
+    return shlex.join(cleaned)
+
+
+def _split_cdrdao_command(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return shlex.split(DEFAULT_CDRDAO_COMMAND)
 
 
 def _as_str(value: object, default: str) -> str:

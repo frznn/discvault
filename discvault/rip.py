@@ -722,6 +722,13 @@ def rip_audio(
         error("cdparanoia produced no WAV files")
         return None, "cdparanoia produced no WAV files"
 
+    invalid_wavs = [path for path in wav_files if not _is_nonempty_file(path)]
+    if invalid_wavs:
+        names = ", ".join(path.name for path in invalid_wavs)
+        reason = f"cdparanoia produced missing or empty WAV file(s): {names}"
+        error(reason)
+        return None, reason
+
     for w in wav_files:
         cleanup.track_file(w, created=True)
 
@@ -739,3 +746,10 @@ def _normalize_selected_tracks(selected_tracks: list[int] | None, track_count: i
 def _wav_name_for_track(track_num: int, track_total: int) -> str:
     width = max(2, len(str(max(track_num, track_total))))
     return f"track{track_num:0{width}d}.cdda.wav"
+
+
+def _is_nonempty_file(path: Path) -> bool:
+    try:
+        return path.exists() and path.stat().st_size > 0
+    except OSError:
+        return False

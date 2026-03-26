@@ -10,6 +10,7 @@ build/
 .venv/
 venv/
 .env
+.mcp.json
 *.egg
 MANIFEST
 .mypy_cache/

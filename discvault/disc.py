@@ -9,7 +9,7 @@ from pathlib import Path
 from .metadata.types import DiscInfo
 
 
-def load_disc_info(device: str) -> DiscInfo:
+def load_disc_info(device: str, debug: bool = False) -> DiscInfo:
     """
     Build a DiscInfo from the disc in *device*.
 
@@ -21,19 +21,22 @@ def load_disc_info(device: str) -> DiscInfo:
     info = DiscInfo(device=device)
 
     if shutil.which("discid"):
-        _try_discid(device, info)
+        _try_discid(device, info, debug=debug)
     if not info.track_offsets and shutil.which("cd-discid"):
-        _try_cd_discid_mb(device, info)
+        _try_cd_discid_mb(device, info, debug=debug)
     if not info.track_offsets and shutil.which("cd-discid"):
-        _try_cd_discid(device, info)
+        _try_cd_discid(device, info, debug=debug)
     # Ensure freedb_disc_id is populated even when track_offsets came from
     # cd-discid --musicbrainz (which doesn't set the freedb ID).
     if not info.freedb_disc_id and shutil.which("cd-discid"):
-        _try_cd_discid(device, info)
+        _try_cd_discid(device, info, debug=debug)
     if shutil.which("cd-info"):
-        _try_cdinfo_track_modes(device, info)
+        _try_cdinfo_track_modes(device, info, debug=debug)
     elif shutil.which("cdrdao"):
-        _try_cdrdao_track_modes(device, info)
+        _try_cdrdao_track_modes(device, info, debug=debug)
+
+    if debug and not info.track_offsets:
+        print("[disc-debug] Could not determine disc geometry from discid/cd-discid.")
 
     return info
 
@@ -42,15 +45,15 @@ def load_disc_info(device: str) -> DiscInfo:
 # discid binary (MusicBrainz discid)
 # ---------------------------------------------------------------------------
 
-def _try_discid(device: str, info: DiscInfo) -> None:
+def _try_discid(device: str, info: DiscInfo, *, debug: bool = False) -> None:
     # `discid` alone outputs the MB disc ID
     try:
         r = subprocess.run(["discid", device], capture_output=True, text=True, timeout=15)
         parts = r.stdout.strip().split()
         if parts:
             info.mb_disc_id = parts[0]
-    except Exception:
-        pass
+    except Exception as exc:
+        _debug(debug, f"discid disc ID lookup failed: {exc}")
 
     # `discid -f` outputs freedb format: discid first last leadout off1 off2 ...
     try:
@@ -66,8 +69,8 @@ def _try_discid(device: str, info: DiscInfo) -> None:
                     info.track_count = track_count
                     info.track_offsets = [int(o) for o in offsets]
                     info.leadout = int(leadout)
-    except Exception:
-        pass
+    except Exception as exc:
+        _debug(debug, f"discid freedb lookup failed: {exc}")
 
     _build_mb_toc(info)
 
@@ -76,7 +79,7 @@ def _try_discid(device: str, info: DiscInfo) -> None:
 # cd-discid --musicbrainz
 # ---------------------------------------------------------------------------
 
-def _try_cd_discid_mb(device: str, info: DiscInfo) -> None:
+def _try_cd_discid_mb(device: str, info: DiscInfo, *, debug: bool = False) -> None:
     try:
         r = subprocess.run(
             ["cd-discid", "--musicbrainz", device],
@@ -93,15 +96,15 @@ def _try_cd_discid_mb(device: str, info: DiscInfo) -> None:
                 info.track_offsets = offsets
                 info.leadout = leadout
                 _build_mb_toc(info)
-    except Exception:
-        pass
+    except Exception as exc:
+        _debug(debug, f"cd-discid --musicbrainz failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
 # cd-discid (freedb format)
 # ---------------------------------------------------------------------------
 
-def _try_cd_discid(device: str, info: DiscInfo) -> None:
+def _try_cd_discid(device: str, info: DiscInfo, *, debug: bool = False) -> None:
     try:
         r = subprocess.run(
             ["cd-discid", device],
@@ -124,8 +127,8 @@ def _try_cd_discid(device: str, info: DiscInfo) -> None:
                     info.track_offsets = offsets
                     info.leadout = leadout
                     _build_mb_toc(info)
-    except Exception:
-        pass
+    except Exception as exc:
+        _debug(debug, f"cd-discid freedb lookup failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +148,7 @@ def _build_mb_toc(info: DiscInfo) -> None:
 _CDINFO_TRACK_MODE_RE = re.compile(r"^\s*track\s+(\d+):\s+(.+)$", re.IGNORECASE)
 
 
-def _try_cdinfo_track_modes(device: str, info: DiscInfo) -> None:
+def _try_cdinfo_track_modes(device: str, info: DiscInfo, *, debug: bool = False) -> None:
     try:
         result = subprocess.run(
             [
@@ -160,10 +163,12 @@ def _try_cdinfo_track_modes(device: str, info: DiscInfo) -> None:
             text=True,
             timeout=15,
         )
-    except Exception:
+    except Exception as exc:
+        _debug(debug, f"cd-info track-mode probe failed: {exc}")
         return
 
     if result.returncode != 0:
+        _debug(debug, f"cd-info track-mode probe exited {result.returncode}")
         return
 
     modes: dict[int, str] = {}
@@ -185,7 +190,7 @@ def _try_cdinfo_track_modes(device: str, info: DiscInfo) -> None:
 _CDRDAO_TRACK_MODE_RE = re.compile(r"^\s*TRACK\s+([A-Z0-9_/]+)", re.IGNORECASE)
 
 
-def _try_cdrdao_track_modes(device: str, info: DiscInfo) -> None:
+def _try_cdrdao_track_modes(device: str, info: DiscInfo, *, debug: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="discvault-track-modes-") as tmpdir:
         toc_path = Path(tmpdir) / "disc.toc"
         try:
@@ -202,10 +207,13 @@ def _try_cdrdao_track_modes(device: str, info: DiscInfo) -> None:
                 text=True,
                 timeout=15,
             )
-        except Exception:
+        except Exception as exc:
+            _debug(debug, f"cdrdao track-mode probe failed: {exc}")
             return
 
         if result.returncode != 0 or not toc_path.exists():
+            if result.returncode != 0:
+                _debug(debug, f"cdrdao track-mode probe exited {result.returncode}")
             return
 
         current_track = 0
@@ -225,3 +233,8 @@ def _try_cdrdao_track_modes(device: str, info: DiscInfo) -> None:
 
         if modes:
             info.track_modes.update(modes)
+
+
+def _debug(enabled: bool, message: str) -> None:
+    if enabled:
+        print(f"[disc-debug] {message}")

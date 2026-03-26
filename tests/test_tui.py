@@ -164,6 +164,14 @@ class TuiHelpersTests(unittest.TestCase):
             album_root.mkdir(parents=True)
             self.assertFalse(_needs_overwrite_confirmation(album_root))
 
+    def test_needs_overwrite_confirmation_for_non_empty_selected_output_dir(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            album_root = Path(tmpdir) / "Artist" / "Album"
+            flac_dir = album_root / "flac"
+            flac_dir.mkdir(parents=True)
+            (flac_dir / "01 - Track.flac").write_text("x")
+            self.assertTrue(_needs_overwrite_confirmation(album_root, {"flac": True}))
+
     def test_target_label_text_is_empty_without_artist_and_album(self) -> None:
         self.assertEqual(_target_label_text("/music", "", "", ""), "")
 

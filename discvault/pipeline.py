@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from . import __version__
 from .cleanup import Cleanup
 from .metadata.types import DiscInfo, Metadata
 from .tracks import compact_track_list
@@ -282,8 +283,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
                 cleanup=cleanup,
                 debug=enc.debug,
                 progress_callback=_encode_progress_callback(callbacks, fmt_key, stage_label),
-                # len() gives the actual number of tracks being encoded, not the highest track number
-                track_total_hint=len(request.selected_tracks) if request.selected_tracks else None,
+                track_total_hint=request.meta.track_count or disc_info.track_count or None,
             )
             if not ok:
                 raise BackupRunError(f"Encoding to {fmt_name} format failed.")
@@ -383,6 +383,7 @@ def write_backup_info(
     cleanup.track_file(info_path, created=not info_path.exists())
     lines = [
         f"Backup timestamp: {datetime.datetime.now().astimezone().isoformat()}",
+        f"DiscVault version: {__version__}",
         f"Device: {device}",
         f"Artist: {artist}",
         f"Album: {album}",
@@ -390,12 +391,16 @@ def write_backup_info(
     if year:
         lines.append(f"Year: {year}")
     lines.append(f"Metadata source: {meta_source}")
-    lines.append(f"Track count: {len(wav_files) or track_count or len(selected_tracks)}")
-    lines.append(f"Selected tracks: {compact_track_list(selected_tracks)}")
-    if outputs.image and toc_path is not None:
-        lines.append(f"Image TOC: {toc_path}")
-        lines.append(f"Image CUE: {cue_path}")
+    lines.append(f"Disc track count: {track_count or len(selected_tracks)}")
+    lines.append(f"Selected tracks: {compact_track_list(selected_tracks) if selected_tracks else '(none)'}")
+    lines.append(f"Audio tracks written: {len(wav_files)}")
+    lines.append(f"Disc image: {'yes' if outputs.image else 'no'}")
+    if bin_path is not None:
         lines.append(f"Image BIN: {bin_path}")
+    if cue_path is not None:
+        lines.append(f"Image CUE: {cue_path}")
+    if toc_path is not None:
+        lines.append(f"Image TOC: {toc_path}")
     lines.append(f"ISO export: {'yes' if outputs.iso else 'no'}")
     if iso_path is not None:
         lines.append(f"Image ISO: {iso_path}")

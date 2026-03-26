@@ -71,6 +71,15 @@ def _target_button_destination(target: Path | None, base_dir: str) -> tuple[Path
     return None, "Open Library", False
 
 
+def _target_label_text(base_dir: str, artist: str, album: str, year: str) -> str:
+    if not artist and not album:
+        return ""
+    from .. import library
+
+    target = library.album_root(base_dir, artist or "?", album or "?", year)
+    return f"Target Dir: {target}"
+
+
 def _dir_has_files(d: Path) -> bool:
     try:
         return any(True for p in d.iterdir() if p.is_file())
@@ -78,11 +87,24 @@ def _dir_has_files(d: Path) -> bool:
         return False
 
 
-def _needs_overwrite_confirmation(album_root: Path, outputs: dict[str, bool]) -> bool:
-    """Return True only if any selected output directory already contains files."""
+def _needs_overwrite_confirmation(album_root: Path, outputs: dict[str, bool] | None = None) -> bool:
+    """Return True when the album root already contains files that may be overwritten."""
     if not album_root.exists():
         return False
     from .. import library
+    if any(path.is_file() for path in album_root.iterdir()):
+        return True
+    outputs = outputs or {
+        "image": True,
+        "iso": True,
+        "flac": True,
+        "mp3": True,
+        "ogg": True,
+        "opus": True,
+        "alac": True,
+        "aac": True,
+        "wav": True,
+    }
     dirs = []
     if outputs.get("image") or outputs.get("iso"):
         dirs.append(library.image_dir(album_root))
@@ -692,7 +714,7 @@ class DiscvaultApp(App[None]):
 
         self._tlog("> Reading disc TOC...")
         try:
-            disc_info = disc_mod.load_disc_info(device)
+            disc_info = disc_mod.load_disc_info(device, debug=bool(getattr(self._args, "debug", False)))
         except Exception as exc:
             self._tlog(f"[bold red]✗ Failed to read disc: {exc}[/bold red]")
             self.call_from_thread(self._enter_error)
@@ -1932,7 +1954,7 @@ class DiscvaultApp(App[None]):
                 return
 
             try:
-                disc_info = disc_mod.load_disc_info(device)
+                disc_info = disc_mod.load_disc_info(device, debug=bool(getattr(self._args, "debug", False)))
             except Exception:
                 return
             disc_info.device = device
