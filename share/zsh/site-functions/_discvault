@@ -1,0 +1,52 @@
+#compdef discvault
+
+_discvault() {
+  _arguments -s \
+  "-h[show this help message and exit]" \
+  "--help[show this help message and exit]" \
+  "-d[CD device (default: auto-detect)]:dev:_files" \
+  "--device[CD device (default: auto-detect)]:dev:_files" \
+  "-o[Library base directory (overrides config)]:dir:_files -/" \
+  "--base-dir[Library base directory (overrides config)]:dir:_files -/" \
+  "--work-dir[Temporary work directory (overrides config)]:dir:_files -/" \
+  "--tracks[Track selection, e.g. 1-10 or 1,2,4-9]:spec:" \
+  "--metadata-file[Import metadata from a .cue, .toc, .json, or .toml file]:file:_files" \
+  "--metadata-url[Import metadata from a supported page URL (currently Bandcamp albums)]:url:" \
+  "--bandcamp-url[Import metadata from a supported page URL (currently Bandcamp albums)]:url:" \
+  "--artist[Artist name (overrides metadata lookup)]:name:" \
+  "--album[Album name (overrides metadata lookup)]:name:" \
+  "--year[Album year (overrides metadata lookup)]:yyyy:" \
+  "--skip-metadata[Proceed without metadata lookup]" \
+  "--strict-manual-fallback[Confirm before falling back to manual entry when lookup fails]" \
+  "--metadata-timeout[Metadata lookup timeout in seconds (overrides config)]:sec:" \
+  "--metadata-debug[Print metadata provider debug output]" \
+  "--cli[Force plain text CLI (default: TUI when interactive)]" \
+  "--check-deps[Check helper-tool dependencies for the current selection and exit]" \
+  "--no-flac[Skip FLAC encoding]" \
+  "--no-mp3[Skip MP3 encoding]" \
+  "--ogg[Enable OGG Vorbis encoding (requires oggenc)]" \
+  "--opus[Enable Opus encoding (requires opusenc)]" \
+  "--alac[Enable ALAC encoding (requires ffmpeg)]" \
+  "--aac[Enable AAC/M4A encoding (requires ffmpeg)]" \
+  "--wav[Save final WAV copies in the library]" \
+  "--no-verify[Skip FLAC --verify (faster but no integrity check)]" \
+  "--flac-compression[FLAC compression level 0–8 (default: 8)]:n:" \
+  "--mp3-quality[lame -V quality for VBR 0–9 (used when --mp3-bitrate=0)]:n:" \
+  "--mp3-bitrate[lame CBR bitrate (default: 320; set 0 for VBR)]:kbps:" \
+  "--opus-bitrate[Opus bitrate in kbps (default: config value)]:kbps:" \
+  "--aac-bitrate[AAC bitrate in kbps (default: config value)]:kbps:" \
+  "--no-image[Skip full disc image (cdrdao)]" \
+  "--iso[Also export an ISO when the disc has a supported data track]" \
+  "--cdrdao-driver[cdrdao driver override]:drv:" \
+  "--sample-offset[cdparanoia sample offset correction (overrides config)]:samples:" \
+  "--accuraterip[Enable optional AccurateRip verification if a helper is installed]" \
+  "--no-accuraterip[Disable AccurateRip verification even if enabled in config]" \
+  "--no-cover-art[Disable downloading cover art]" \
+  "--keep-wav[Keep intermediate WAV files]" \
+  "--eject[Eject disc when done]" \
+  "--dry-run[Show what would be done without accessing the disc]" \
+  "--debug[Print subprocess commands and verbose output]" \
+  "--version[show program's version number and exit]"
+}
+
+_discvault "$@"

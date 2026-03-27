@@ -1,24 +1,61 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "discvault"
 version = "0.2.0"
 description = "CD archiver — disc image backup, audio rip, FLAC + MP3 encode, metadata lookup"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [
+    {name = "frznn"},
+]
+keywords = ["cd", "ripping", "archiving", "linux", "music", "tui"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
+    "Topic :: System :: Archiving",
+    "Topic :: Utilities",
+]
 dependencies = [
     "rich>=13.0",
     "requests>=2.28",
+    "textual>=0.47",
     "tomli>=2.0; python_version < '3.11'",
 ]
 
+[project.urls]
+Homepage = "https://github.com/frznn/discvault"
+Repository = "https://github.com/frznn/discvault"
+Issues = "https://github.com/frznn/discvault/issues"
+Changelog = "https://github.com/frznn/discvault/blob/master/CHANGELOG.md"
+
 [project.optional-dependencies]
-tui = ["textual>=0.47"]
-all = ["discvault[tui]"]
+tui = []
+all = []
 
 [project.scripts]
 discvault = "discvault.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.data-files]
+"share/man/man1" = ["share/man/man1/discvault.1"]
+"share/bash-completion/completions" = ["share/bash-completion/completions/discvault"]
+"share/zsh/site-functions" = ["share/zsh/site-functions/_discvault"]
+"share/fish/vendor_completions.d" = ["share/fish/vendor_completions.d/discvault.fish"]
 
 [tool.setuptools.packages.find]
 where = ["."]

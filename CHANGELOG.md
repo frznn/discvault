@@ -6,6 +6,15 @@ The project history starts at `v0.1`.
 
 ## [Unreleased]
 
+### Added
+- `--check-deps` CLI checklist with distro-aware install hints for DiscVault helper tools.
+- MIT licensing, generated man page, and generated shell completions for `bash`, `zsh`, and `fish`.
+- GitHub Actions CI and tag-driven publish workflows for package builds and PyPI releases.
+
+### Changed
+- The default Python package install now includes the Textual TUI instead of requiring a separate extra.
+- Packaging metadata now targets PyPI and `pipx` as the primary release path for Linux installs.
+
 ## [0.2] - 2026-03-26
 
 ### Added

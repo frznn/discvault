@@ -15,7 +15,7 @@ The package version in this repo is `0.2.0`.
 
 ## Features
 
-- TUI by default when interactive and `textual` is installed
+- TUI by default when interactive
 - Plain CLI mode with `--cli`
 - Disc image plus per-format audio outputs
 - Track selection, including mixed-mode discs with data tracks excluded by default
@@ -37,17 +37,40 @@ DiscVault is currently built around Linux CD device tooling and Linux-style devi
 
 Some helper features have cross-platform fallbacks, but the ripping stack is Linux-oriented.
 
-## Python Install
+## Install
+
+Recommended for end users:
 
 ```bash
-python -m pip install -e ".[tui]"
+pipx install discvault
 ```
 
-Without the TUI dependency:
+Standard Python install:
+
+```bash
+python -m pip install discvault
+```
+
+From a local checkout:
 
 ```bash
 python -m pip install -e .
 ```
+
+## Before First Rip
+
+Run the built-in checklist before relying on the app:
+
+```bash
+discvault --check-deps
+```
+
+That command:
+
+- checks the helper tools required for your current output selection
+- reports optional enhancements separately
+- prints distro-aware install hints on Debian/Ubuntu, Arch-based, and Fedora/RHEL systems
+- exits with `0` when required dependencies are available and `1` when they are not
 
 ## System Dependencies
 
@@ -82,19 +105,19 @@ Optional extras:
 **Debian/Ubuntu:**
 
 ```bash
-sudo apt install cdrdao cdparanoia discid cd-info flac lame vorbis-tools opus-tools ffmpeg eject libnotify-bin
+sudo apt install cdrdao wodim cdparanoia discid cd-discid libcdio-utils flac lame vorbis-tools opus-tools ffmpeg eject libnotify-bin
 ```
 
 **Arch Linux:**
 
 ```bash
-sudo pacman -S cdrdao cdparanoia libdiscid libcdio flac lame vorbis-tools opus-tools ffmpeg eject libnotify
+sudo pacman -S cdrdao cdrtools cdparanoia libdiscid libcdio flac lame vorbis-tools opus-tools ffmpeg eject libnotify
 ```
 
 **Fedora/RHEL:**
 
 ```bash
-sudo dnf install cdrdao cdparanoia libdiscid cd-discid flac lame vorbis-tools opus-tools ffmpeg eject libnotify
+sudo dnf install cdrdao cdrtools cdparanoia libdiscid cd-discid libcdio flac lame vorbis-tools opus-tools ffmpeg eject libnotify
 ```
 
 For `discid` / `cd-discid` fallback, install whichever is available for your distribution.
@@ -123,6 +146,7 @@ discvault --cli --metadata-file album.cue
 discvault --cli --metadata-url https://artist.bandcamp.com/album/example
 discvault --cli --artist "Artist" --album "Album" --year 1997
 discvault --cli --accuraterip
+discvault --check-deps --no-image --ogg --opus
 ```
 
 ## How Metadata Lookup Works
@@ -196,6 +220,7 @@ Main options:
 - `--metadata-timeout SEC`
 - `--metadata-debug`
 - `--cli`
+- `--check-deps`
 
 Audio outputs:
 
@@ -229,6 +254,7 @@ Misc:
 - `--eject`
 - `--dry-run`
 - `--debug`
+- `--version`
 
 ## Outputs and Library Layout
 
@@ -358,14 +384,6 @@ Minimal JSON example:
 }
 ```
 
-Supported URL imports:
-
-- Bandcamp album URLs
-
-## Verification and Cover Art
-
-AccurateRip:
-
 ## Real-Drive Smoke Test
 
 For repeatable hardware validation, the repo now includes:
@@ -392,10 +410,18 @@ python tests/manual/real_disc_smoke.py --device /dev/sr0
 
 The script writes only into a temporary output root and uses isolated HOME directories so it does not modify your normal DiscVault config.
 
+## Verification and Cover Art
+
+AccurateRip:
+
 - optional
 - disabled by default
 - requires `arver` or `trackverify`
 - skipped cleanly when no helper is installed
+
+Supported URL imports:
+
+- Bandcamp album URLs
 
 Cover art:
 

@@ -1,0 +1,135 @@
+.TH DISCVAULT 1 "" "discvault 0.2.0" "User Commands"
+.SH NAME
+discvault \- Linux CD archiver with CLI and Textual TUI
+.SH SYNOPSIS
+.B discvault
+[options]
+.SH DESCRIPTION
+Rip and archive CDs to audio files and full disc images.
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+show this help message and exit
+.TP
+\fB\-d\fR DEV, \fB\-\-device\fR DEV
+CD device (default: auto\-detect)
+.TP
+\fB\-o\fR DIR, \fB\-\-base\-dir\fR DIR
+Library base directory (overrides config)
+.TP
+\fB\-\-work\-dir\fR DIR
+Temporary work directory (overrides config)
+.TP
+\fB\-\-tracks\fR SPEC
+Track selection, e.g. 1\-10 or 1,2,4\-9
+.TP
+\fB\-\-metadata\-file\fR FILE
+Import metadata from a .cue, .toc, .json, or .toml file
+.TP
+\fB\-\-metadata\-url\fR URL, \fB\-\-bandcamp\-url\fR URL
+Import metadata from a supported page URL (currently Bandcamp albums)
+.TP
+\fB\-\-artist\fR NAME
+Artist name (overrides metadata lookup)
+.TP
+\fB\-\-album\fR NAME
+Album name (overrides metadata lookup)
+.TP
+\fB\-\-year\fR YYYY
+Album year (overrides metadata lookup)
+.TP
+\fB\-\-skip\-metadata\fR
+Proceed without metadata lookup
+.TP
+\fB\-\-strict\-manual\-fallback\fR
+Confirm before falling back to manual entry when lookup fails
+.TP
+\fB\-\-metadata\-timeout\fR SEC
+Metadata lookup timeout in seconds (overrides config)
+.TP
+\fB\-\-metadata\-debug\fR
+Print metadata provider debug output
+.TP
+\fB\-\-cli\fR
+Force plain text CLI (default: TUI when interactive)
+.TP
+\fB\-\-check\-deps\fR
+Check helper\-tool dependencies for the current selection and exit
+.TP
+\fB\-\-no\-cover\-art\fR
+Disable downloading cover art
+.TP
+\fB\-\-keep\-wav\fR
+Keep intermediate WAV files
+.TP
+\fB\-\-eject\fR
+Eject disc when done
+.TP
+\fB\-\-dry\-run\fR
+Show what would be done without accessing the disc
+.TP
+\fB\-\-debug\fR
+Print subprocess commands and verbose output
+.TP
+\fB\-\-version\fR
+show program's version number and exit
+.SH ENCODING
+.TP
+\fB\-\-no\-flac\fR
+Skip FLAC encoding
+.TP
+\fB\-\-no\-mp3\fR
+Skip MP3 encoding
+.TP
+\fB\-\-ogg\fR
+Enable OGG Vorbis encoding (requires oggenc)
+.TP
+\fB\-\-opus\fR
+Enable Opus encoding (requires opusenc)
+.TP
+\fB\-\-alac\fR
+Enable ALAC encoding (requires ffmpeg)
+.TP
+\fB\-\-aac\fR
+Enable AAC/M4A encoding (requires ffmpeg)
+.TP
+\fB\-\-wav\fR
+Save final WAV copies in the library
+.TP
+\fB\-\-no\-verify\fR
+Skip FLAC \-\-verify (faster but no integrity check)
+.TP
+\fB\-\-flac\-compression\fR N
+FLAC compression level 0–8 (default: 8)
+.TP
+\fB\-\-mp3\-quality\fR N
+lame \-V quality for VBR 0–9 (used when \-\-mp3\-bitrate=0)
+.TP
+\fB\-\-mp3\-bitrate\fR KBPS
+lame CBR bitrate (default: 320; set 0 for VBR)
+.TP
+\fB\-\-opus\-bitrate\fR KBPS
+Opus bitrate in kbps (default: config value)
+.TP
+\fB\-\-aac\-bitrate\fR KBPS
+AAC bitrate in kbps (default: config value)
+.SH DISC IMAGE
+.TP
+\fB\-\-no\-image\fR
+Skip full disc image (cdrdao)
+.TP
+\fB\-\-iso\fR
+Also export an ISO when the disc has a supported data track
+.TP
+\fB\-\-cdrdao\-driver\fR DRV
+cdrdao driver override
+.TP
+\fB\-\-sample\-offset\fR SAMPLES
+cdparanoia sample offset correction (overrides config)
+.SH VERIFICATION
+.TP
+\fB\-\-accuraterip\fR
+Enable optional AccurateRip verification if a helper is installed
+.TP
+\fB\-\-no\-accuraterip\fR
+Disable AccurateRip verification even if enabled in config
