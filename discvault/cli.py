@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import __version__
 from .cleanup import Cleanup
 from .config import Config, first_run_setup
 from .tracks import compact_track_list, parse_track_spec, resolve_selected_tracks
@@ -28,35 +29,16 @@ def main() -> None:
             raise SystemExit(2)
     cfg = Config.load()
 
+    if args.check_deps:
+        check_cfg = cfg.clone()
+        _apply_cli_overrides(args, check_cfg)
+        raise SystemExit(_run_dependency_check(args, check_cfg))
+
     # First-run wizard (only if interactive and no config file yet)
     if not args.dry_run:
         first_run_setup(cfg)
 
-    # CLI overrides
-    if args.base_dir:
-        cfg.base_dir = args.base_dir
-    if args.work_dir:
-        cfg.work_dir = args.work_dir
-    if args.cdrdao_driver:
-        cfg.cdrdao_driver = args.cdrdao_driver
-    if args.keep_wav:
-        cfg.keep_wav = True
-    if args.eject:
-        cfg.eject_after = True
-    if args.metadata_timeout:
-        cfg.metadata_timeout = args.metadata_timeout
-    if args.sample_offset is not None:
-        cfg.cdparanoia_sample_offset = args.sample_offset
-    if args.accuraterip:
-        cfg.accuraterip_enabled = True
-    if args.no_accuraterip:
-        cfg.accuraterip_enabled = False
-    if args.no_cover_art:
-        cfg.download_cover_art = False
-    if args.opus_bitrate:
-        cfg.opus_bitrate = args.opus_bitrate
-    if args.aac_bitrate:
-        cfg.aac_bitrate = args.aac_bitrate
+    _apply_cli_overrides(args, cfg)
 
     # Use TUI by default when running interactively, unless --cli is given.
     use_tui = not args.cli and sys.stdin.isatty() and _textual_available()
@@ -80,7 +62,7 @@ def _run_tui(args: argparse.Namespace, cfg: Config) -> None:
     try:
         from .ui.tui import DiscvaultApp
     except ImportError:
-        error("Textual is not installed. Run: pip install discvault[tui]")
+        error("Textual is not available in this environment. Reinstall DiscVault or run with --cli.")
         sys.exit(1)
     app = DiscvaultApp(args, cfg)
     # Use run_async() with a plain event loop instead of asyncio.run().
@@ -421,6 +403,42 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     success(f"Done! Files saved to: {result.album_root}")
 
 
+def _apply_cli_overrides(args: argparse.Namespace, cfg: Config) -> None:
+    if args.base_dir:
+        cfg.base_dir = args.base_dir
+    if args.work_dir:
+        cfg.work_dir = args.work_dir
+    if args.cdrdao_driver:
+        cfg.cdrdao_driver = args.cdrdao_driver
+    if args.keep_wav:
+        cfg.keep_wav = True
+    if args.eject:
+        cfg.eject_after = True
+    if args.metadata_timeout:
+        cfg.metadata_timeout = args.metadata_timeout
+    if args.sample_offset is not None:
+        cfg.cdparanoia_sample_offset = args.sample_offset
+    if args.accuraterip:
+        cfg.accuraterip_enabled = True
+    if args.no_accuraterip:
+        cfg.accuraterip_enabled = False
+    if args.no_cover_art:
+        cfg.download_cover_art = False
+    if args.opus_bitrate:
+        cfg.opus_bitrate = args.opus_bitrate
+    if args.aac_bitrate:
+        cfg.aac_bitrate = args.aac_bitrate
+
+
+def _run_dependency_check(args: argparse.Namespace, cfg: Config) -> int:
+    from . import deps as deps_mod
+
+    report = deps_mod.build_dependency_report(args, cfg, textual_available=_textual_available())
+    for line in deps_mod.format_dependency_report(report):
+        console.print(line)
+    return deps_mod.dependency_exit_code(report)
+
+
 # ---------------------------------------------------------------------------
 # Confirm / edit helpers
 # ---------------------------------------------------------------------------
@@ -603,10 +621,10 @@ def _dry_run_summary(
 # Argument parser
 # ---------------------------------------------------------------------------
 
-def _parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="discvault",
-        description="Rip and archive CDs to FLAC/MP3 with full disc image.",
+        description="Rip and archive CDs to audio files and full disc images.",
     )
 
     p.add_argument("-d", "--device", metavar="DEV",
@@ -641,6 +659,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Print metadata provider debug output")
     p.add_argument("--cli", action="store_true",
                    help="Force plain text CLI (default: TUI when interactive)")
+    p.add_argument("--check-deps", action="store_true",
+                   help="Check helper-tool dependencies for the current selection and exit")
     # kept for backward compat
     p.add_argument("--tui", action="store_true", help=argparse.SUPPRESS)
 
@@ -702,6 +722,10 @@ def _parse_args() -> argparse.Namespace:
                    help="Show what would be done without accessing the disc")
     p.add_argument("--debug", action="store_true",
                    help="Print subprocess commands and verbose output")
-    p.add_argument("--version", action="version", version="discvault 0.2.0")
+    p.add_argument("--version", action="version", version=f"discvault {__version__}")
 
-    return p.parse_args()
+    return p
+
+
+def _parse_args() -> argparse.Namespace:
+    return build_parser().parse_args()

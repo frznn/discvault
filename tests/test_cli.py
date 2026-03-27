@@ -6,7 +6,7 @@ from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
 
-from discvault.cli import _run
+from discvault.cli import _run, main
 from discvault.config import Config
 from discvault.metadata.types import DiscInfo, Metadata
 
@@ -131,6 +131,44 @@ class CliPipelineTests(unittest.TestCase):
 
             warn.assert_any_call("Metadata URL import skipped: unsupported provider (example.com).")
             self.assertEqual(fetch_candidates.call_args.kwargs["metadata_url"], "")
+
+
+class CliEntryPointTests(unittest.TestCase):
+    def test_check_deps_exits_before_first_run_or_rip_flow(self) -> None:
+        args = Namespace(
+            tracks=None,
+            base_dir=None,
+            work_dir=None,
+            cdrdao_driver=None,
+            keep_wav=False,
+            eject=False,
+            metadata_timeout=None,
+            sample_offset=None,
+            accuraterip=False,
+            no_accuraterip=False,
+            no_cover_art=False,
+            opus_bitrate=None,
+            aac_bitrate=None,
+            check_deps=True,
+            dry_run=False,
+            cli=False,
+        )
+        cfg = Config()
+
+        with patch("discvault.cli._parse_args", return_value=args), \
+            patch("discvault.cli.Config.load", return_value=cfg), \
+            patch("discvault.cli.first_run_setup") as first_run_setup, \
+            patch("discvault.cli._run_tui") as run_tui, \
+            patch("discvault.cli._run") as run_cli, \
+            patch("discvault.cli._run_dependency_check", return_value=1) as run_check:
+            with self.assertRaises(SystemExit) as raised:
+                main()
+
+        self.assertEqual(raised.exception.code, 1)
+        run_check.assert_called_once()
+        first_run_setup.assert_not_called()
+        run_tui.assert_not_called()
+        run_cli.assert_not_called()
 
 
 if __name__ == "__main__":
