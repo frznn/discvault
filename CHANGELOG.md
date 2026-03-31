@@ -10,10 +10,15 @@ The project history starts at `v0.1`.
 - `--check-deps` CLI checklist with distro-aware install hints for DiscVault helper tools.
 - MIT licensing, generated man page, and generated shell completions for `bash`, `zsh`, and `fish`.
 - GitHub Actions CI and tag-driven publish workflows for package builds and PyPI releases.
+- Manual Search and Import popups in the TUI for free-form metadata lookup and unified file/URL imports.
 
 ### Changed
 - The default Python package install now includes the Textual TUI instead of requiring a separate extra.
 - Packaging metadata now targets PyPI and `pipx` as the primary release path for Linux installs.
+- TUI metadata actions now use a popup-driven flow for manual searching and importing instead of separate inline/file/url controls.
+
+### Fixed
+- Manual metadata searches now use looser MusicBrainz and Discogs queries so partial titles, punctuation differences, and missing years return candidates more reliably.
 
 ## [0.2] - 2026-03-26
 
