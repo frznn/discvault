@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import requests
 
+from .search import combine_search_text
 from .sanitize import trim
 from .types import DiscInfo, Metadata, Track
 
@@ -17,13 +18,20 @@ def lookup(
     artist: str = "",
     album: str = "",
     year: str = "",
+    query: str = "",
     token: str = "",
     timeout: int = 15,
     debug: bool = False,
 ) -> list[Metadata]:
     """Search Discogs using seed metadata and return candidate releases."""
-    search_terms = _search_terms(seed_candidates or [], artist=artist, album=album, year=year)
-    if not search_terms:
+    search_plans = _search_plans(
+        seed_candidates or [],
+        artist=artist,
+        album=album,
+        year=year,
+        query=query,
+    )
+    if not search_plans:
         if debug:
             print("[metadata-debug] Discogs: no search terms available")
         return []
@@ -34,16 +42,7 @@ def lookup(
 
     results: list[Metadata] = []
     seen_ids: set[int] = set()
-    for search_artist, search_album, search_year in search_terms:
-        params = {
-            "type": "release",
-            "artist": search_artist,
-            "release_title": search_album,
-            "per_page": 6,
-        }
-        if search_year:
-            params["year"] = search_year
-
+    for params, allow_inexact_track_count in search_plans:
         try:
             resp = requests.get(
                 f"{_API_BASE}/database/search",
@@ -68,6 +67,7 @@ def lookup(
                 headers=headers,
                 timeout=timeout,
                 debug=debug,
+                allow_inexact_track_count=allow_inexact_track_count,
             )
             if meta is None:
                 continue
@@ -77,15 +77,36 @@ def lookup(
     return results
 
 
-def _search_terms(
+def _search_plans(
     seed_candidates: list[Metadata],
     *,
     artist: str,
     album: str,
     year: str,
-) -> list[tuple[str, str, str]]:
-    terms: list[tuple[str, str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
+    query: str,
+) -> list[tuple[dict[str, str | int], bool]]:
+    plans: list[tuple[dict[str, str | int], bool]] = []
+    seen: set[tuple[tuple[tuple[str, str], ...], bool]] = set()
+
+    def _add(params: dict[str, str | int], *, allow_inexact_track_count: bool) -> None:
+        key = (
+            tuple(sorted((str(name), str(value)) for name, value in params.items())),
+            allow_inexact_track_count,
+        )
+        if key not in seen:
+            seen.add(key)
+            plans.append((params, allow_inexact_track_count))
+
+    free_form_query = combine_search_text(query, artist=artist, album=album, year=year)
+    if free_form_query:
+        _add(
+            {
+                "type": "release",
+                "q": free_form_query,
+                "per_page": 10,
+            },
+            allow_inexact_track_count=True,
+        )
 
     candidates = list(seed_candidates)
     if artist or album:
@@ -101,14 +122,39 @@ def _search_terms(
     for candidate in candidates:
         artist_name = trim(candidate.album_artist)
         album_name = trim(candidate.album)
-        if not artist_name or not album_name:
+        if not artist_name and not album_name:
             continue
         search_year = candidate.year if candidate.year.isdigit() else ""
-        key = (artist_name, album_name, search_year)
-        if key not in seen:
-            seen.add(key)
-            terms.append(key)
-    return terms
+        full_text = combine_search_text(
+            "",
+            artist=artist_name,
+            album=album_name,
+            year=search_year,
+        )
+        if full_text:
+            _add(
+                {
+                    "type": "release",
+                    "q": full_text,
+                    "per_page": 10,
+                },
+                allow_inexact_track_count=True,
+            )
+
+        params: dict[str, str | int] = {
+            "type": "release",
+            "per_page": 6,
+        }
+        if artist_name:
+            params["artist"] = artist_name
+        if album_name:
+            params["release_title"] = album_name
+        if search_year:
+            params["year"] = search_year
+        if "artist" in params or "release_title" in params:
+            _add(params, allow_inexact_track_count=False)
+
+    return plans
 
 
 def _fetch_release(
@@ -118,6 +164,7 @@ def _fetch_release(
     headers: dict[str, str],
     timeout: int,
     debug: bool,
+    allow_inexact_track_count: bool,
 ) -> Metadata | None:
     try:
         resp = requests.get(
@@ -140,7 +187,7 @@ def _fetch_release(
     tracks = _parse_tracklist(data.get("tracklist", []), fallback_artist=album_artist)
     if disc_info.track_count and tracks:
         audio_track_count = len(disc_info.audio_track_numbers) or disc_info.track_count
-        if len(tracks) not in {disc_info.track_count, audio_track_count}:
+        if not allow_inexact_track_count and len(tracks) not in {disc_info.track_count, audio_track_count}:
             return None
 
     if not album_artist and not album and not tracks:
@@ -163,6 +210,7 @@ def _fetch_release(
         tracks=tracks,
         cover_art_url=cover_art_url,
         discogs_release_id=release_id,
+        match_quality="search",
     )
 
 

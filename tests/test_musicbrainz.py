@@ -87,8 +87,45 @@ class MusicBrainzTests(unittest.TestCase):
         self.assertEqual(results[0].album, "Album")
         self.assertEqual(results[0].year, "2000")
         self.assertEqual(results[0].tracks[0].title, "Track One")
-        self.assertIn('artist:"Artist"', get.call_args_list[0].kwargs["params"]["query"])
-        self.assertIn('release:"Album"', get.call_args_list[0].kwargs["params"]["query"])
+        self.assertIn("artist:(Artist)", get.call_args_list[0].kwargs["params"]["query"])
+        self.assertIn("release:(Album)", get.call_args_list[0].kwargs["params"]["query"])
+        self.assertIn("date:2000*", get.call_args_list[0].kwargs["params"]["query"])
+
+    def test_free_form_release_search_uses_tokenized_query(self) -> None:
+        disc_info = DiscInfo(device="/dev/cdrom", track_count=1)
+        search_payload = {"releases": [{"id": "release-1"}]}
+        detail_payload = {
+            "id": "release-1",
+            "title": "Salvammo 'o munno",
+            "artist-credit": [{"name": "Enzo Avitabile"}, {"name": " & "}, {"name": "Bottari"}],
+            "media": [
+                {
+                    "track-count": 1,
+                    "tracks": [{"number": "1", "title": "Track One"}],
+                }
+            ],
+        }
+
+        with patch(
+            "discvault.metadata.musicbrainz.requests.get",
+            side_effect=[self._response(search_payload), self._response(detail_payload)],
+        ) as get:
+            results = search_releases(
+                "",
+                "",
+                query="Enzo Avitabile & Bottari Salvammo 'o munno",
+                disc_info=disc_info,
+                debug=False,
+            )
+
+        self.assertEqual(len(results), 1)
+        query = get.call_args_list[0].kwargs["params"]["query"]
+        self.assertIn("Enzo", query)
+        self.assertIn("Avitabile", query)
+        self.assertIn("Bottari", query)
+        self.assertIn("Salvammo", query)
+        self.assertIn("munno", query)
+        self.assertNotIn(" o ", query)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ def fetch_candidates(
     metadata_file: str = "",
     metadata_url: str = "",
     manual_hints: tuple[str, str, str] | None = None,
+    manual_query: str = "",
 ) -> list[Metadata]:
     """
     Query metadata providers and return a deduplicated list of candidates.
@@ -34,7 +35,8 @@ def fetch_candidates(
     hint_artist = hint_album = hint_year = ""
     if manual_hints:
         hint_artist, hint_album, hint_year = (trim(part) for part in manual_hints)
-    has_manual_terms = bool(hint_artist and hint_album)
+    manual_query = trim(manual_query)
+    has_manual_terms = bool(manual_query or hint_artist or hint_album)
 
     results: list[Metadata] = []
 
@@ -91,6 +93,7 @@ def fetch_candidates(
                 hint_artist,
                 hint_album,
                 year=hint_year,
+                query=manual_query,
                 disc_info=disc_info,
                 timeout=cfg.metadata_timeout,
                 debug=debug,
@@ -145,6 +148,7 @@ def fetch_candidates(
                     artist=hint_artist,
                     album=hint_album,
                     year=hint_year,
+                    query=manual_query,
                     token=cfg.discogs.token,
                     timeout=cfg.metadata_timeout,
                     debug=debug,

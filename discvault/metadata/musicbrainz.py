@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import requests
 
+from .search import combine_search_text, extract_year, search_tokens
 from .types import DiscInfo, Metadata, Track
 from .sanitize import trim
 
@@ -37,6 +38,7 @@ def search_releases(
     album: str,
     *,
     year: str = "",
+    query: str = "",
     disc_info: DiscInfo | None = None,
     timeout: int = 15,
     debug: bool = False,
@@ -45,47 +47,54 @@ def search_releases(
     search_artist = trim(artist)
     search_album = trim(album)
     search_year = trim(year)
-    if not search_artist or not search_album:
-        return []
-
-    data = _request_json(
-        f"{_MB_BASE}/release",
-        {
-            "query": _search_query(search_artist, search_album, search_year),
-            "fmt": "json",
-            "limit": "6",
-        },
-        timeout,
-        debug,
-        "MusicBrainz release search",
+    search_queries = _search_queries(
+        query=trim(query),
+        artist=search_artist,
+        album=search_album,
+        year=search_year,
     )
-    if data is None:
+    if not search_queries:
         return []
 
     effective_disc = disc_info or DiscInfo(device="")
     results: list[Metadata] = []
     seen_release_ids: set[str] = set()
-    for release in data.get("releases", []):
-        release_id = trim(str(release.get("id") or ""))
-        if not release_id or release_id in seen_release_ids:
-            continue
-        detail = _request_json(
-            f"{_MB_BASE}/release/{release_id}",
+    for search_query in search_queries:
+        data = _request_json(
+            f"{_MB_BASE}/release",
             {
-                "inc": "artists+recordings+artist-credits+release-groups+media",
+                "query": search_query,
                 "fmt": "json",
+                "limit": "8",
             },
             timeout,
             debug,
-            f"MusicBrainz release fetch ({release_id})",
+            "MusicBrainz release search",
         )
-        if detail is None:
+        if data is None:
             continue
-        meta = _release_to_metadata(detail, effective_disc, debug)
-        if meta is None or meta in results:
-            continue
-        results.append(meta)
-        seen_release_ids.add(release_id)
+
+        for release in data.get("releases", []):
+            release_id = trim(str(release.get("id") or ""))
+            if not release_id or release_id in seen_release_ids:
+                continue
+            detail = _request_json(
+                f"{_MB_BASE}/release/{release_id}",
+                {
+                    "inc": "artists+recordings+artist-credits+release-groups+media",
+                    "fmt": "json",
+                },
+                timeout,
+                debug,
+                f"MusicBrainz release fetch ({release_id})",
+            )
+            if detail is None:
+                continue
+            meta = _release_to_metadata(detail, effective_disc, debug, match_quality="search")
+            if meta is None or meta in results:
+                continue
+            results.append(meta)
+            seen_release_ids.add(release_id)
     return results
 
 
@@ -155,7 +164,13 @@ def _select_medium(release: dict, disc_info: DiscInfo, debug: bool) -> dict | No
     return None
 
 
-def _release_to_metadata(release: dict, disc_info: DiscInfo, debug: bool) -> Metadata | None:
+def _release_to_metadata(
+    release: dict,
+    disc_info: DiscInfo,
+    debug: bool,
+    *,
+    match_quality: str = "",
+) -> Metadata | None:
     medium = _select_medium(release, disc_info, debug)
     if medium is None:
         return None
@@ -197,17 +212,57 @@ def _release_to_metadata(release: dict, disc_info: DiscInfo, debug: bool) -> Met
             if isinstance(release.get("release-group"), dict)
             else ""
         ),
+        match_quality=match_quality,
     )
 
 
-def _search_query(artist: str, album: str, year: str) -> str:
-    query = [
-        f'artist:"{_escape_query_term(artist)}"',
-        f'release:"{_escape_query_term(album)}"',
-    ]
+def _search_queries(*, query: str, artist: str, album: str, year: str) -> list[str]:
+    results: list[str] = []
+    seen: set[str] = set()
+
+    def _add(search_query: str) -> None:
+        if search_query and search_query not in seen:
+            seen.add(search_query)
+            results.append(search_query)
+
+    _add(_structured_search_query(artist, album, year))
+    _add(_token_search_query(combine_search_text(query, artist=artist, album=album, year=year), year))
+    return results
+
+
+def _structured_search_query(artist: str, album: str, year: str) -> str:
+    query: list[str] = []
+    artist_query = _field_query("artist", artist)
+    album_query = _field_query("release", album)
+    if artist_query:
+        query.append(artist_query)
+    if album_query:
+        query.append(album_query)
     if year.isdigit() and len(year) == 4:
         query.append(f"date:{year}*")
     return " AND ".join(query)
+
+
+def _field_query(field: str, value: str) -> str:
+    tokens = search_tokens(value)
+    if not tokens:
+        return ""
+    escaped = " AND ".join(_escape_query_term(token) for token in tokens)
+    return f"{field}:({escaped})"
+
+
+def _token_search_query(text: str, year: str) -> str:
+    tokens = search_tokens(text)
+    extracted_year = extract_year(text)
+    effective_year = year if year.isdigit() and len(year) == 4 else extracted_year
+    terms = [
+        _escape_query_term(token)
+        for token in tokens
+        if not (token.isdigit() and len(token) == 4)
+    ]
+    if effective_year:
+        terms.append(f"date:{effective_year}*")
+    return " AND ".join(terms)
 
 
 def _escape_query_term(value: str) -> str:
