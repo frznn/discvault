@@ -53,7 +53,7 @@ class SourceSelectScreen(ModalScreen[dict[str, bool] | None]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Label("Search Metadata", id="source-title"),
+            Label("Metadata Sources", id="source-title"),
             Vertical(
                 Checkbox("CD-Text (from disc)", value=self._sources.get("cdtext", True), id="src-cdtext", compact=True, classes="source-check"),
                 Checkbox("MusicBrainz", value=self._sources.get("musicbrainz", True), id="src-musicbrainz", compact=True, classes="source-check"),
@@ -63,7 +63,7 @@ class SourceSelectScreen(ModalScreen[dict[str, bool] | None]):
             ),
             Horizontal(
                 Button("Cancel", id="source-cancel"),
-                Button("Search", id="source-save", variant="success"),
+                Button("Apply & Search", id="source-save", variant="success"),
                 id="source-buttons",
             ),
             id="source-dialog",

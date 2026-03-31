@@ -30,11 +30,12 @@ if TYPE_CHECKING:
     from ..config import Config
     from ..metadata.types import Metadata, DiscInfo
 
+from ..metadata.search import combine_search_text
 from ..pipeline import _output_stage_label
 from ..tracks import compact_track_list, default_selected_tracks, parse_track_spec, resolve_selected_tracks
 from .confirm import ConfirmScreen, _copy_to_clipboard
 from .folder_picker import FolderPickerScreen
-from .import_prompt import ImportPromptScreen
+from .import_prompt import MetadataImportPromptScreen, TextPromptScreen
 from .output_select import OutputSelectScreen
 from .settings import ConfigScreen
 from .source_select import SourceSelectScreen
@@ -228,6 +229,7 @@ class DiscvaultApp(App[None]):
         self._out_wav = bool(getattr(args, "wav", False))
         self._cover_art_selected = bool(cfg.download_cover_art)
         self._cover_art_available = False
+        self._metadata_search_query = ""
         self._metadata_file_path = getattr(args, "metadata_file", "") or ""
         self._metadata_url = getattr(args, "metadata_url", getattr(args, "bandcamp_url", "")) or ""
         self._auto_import_file_pending = bool(self._metadata_file_path)
@@ -252,14 +254,14 @@ class DiscvaultApp(App[None]):
                         with Vertical(id="candidates-section"):
                             yield DataTable(id="meta-table", cursor_type="row", zebra_stripes=True)
 
-                    with Horizontal(id="metadata-actions-row"):
-                        yield Button("Search Metadata", id="btn-more", disabled=True)
-                        yield Button("Import from File", id="btn-import-file", disabled=True)
-                        yield Button("Import from URL", id="btn-import-url", disabled=True)
-                        yield Button("Manual Entry", id="btn-manual", disabled=True)
-                        with Horizontal(id="metadata-actions-right"):
-                            yield Checkbox("Download Cover Art", id="chk-cover-art", compact=True, disabled=True)
-                            yield Label("", id="cover-art-source", classes="cover-art-source-lbl")
+                        with Horizontal(id="metadata-actions-row"):
+                            yield Button("Sources…", id="btn-sources", disabled=True)
+                            yield Button("Import", id="btn-import", disabled=True)
+                            yield Button("Manual Search", id="btn-more", disabled=True)
+                            yield Button("Manual Entry", id="btn-manual", disabled=True)
+                            with Horizontal(id="metadata-actions-right"):
+                                yield Checkbox("Download Cover Art", id="chk-cover-art", compact=True, disabled=True)
+                                yield Label("", id="cover-art-source", classes="cover-art-source-lbl")
 
                 # Ready phase: tag inputs
                 with Horizontal(id="tags-row"):
@@ -420,9 +422,22 @@ class DiscvaultApp(App[None]):
     def _metadata_url_value(self) -> str:
         return self._metadata_url
 
+    def _manual_search_request(self) -> tuple[str, tuple[str, str, str]]:
+        search_text = self._metadata_search_query.strip()
+        if search_text:
+            return search_text, ("", "", "")
+
+        hints = self._manual_search_hints()
+        return combine_search_text(
+            "",
+            artist=hints[0],
+            album=hints[1],
+            year=hints[2],
+        ), hints
+
     def _has_manual_search_terms(self) -> bool:
-        artist, album, _year = self._manual_search_hints()
-        return bool(artist and album)
+        query, hints = self._manual_search_request()
+        return bool(query or hints[0] or hints[1])
 
     def _track_is_audio(self, track_number: int) -> bool:
         return self._disc_info.is_audio_track(track_number) if self._disc_info else True
@@ -640,6 +655,13 @@ class DiscvaultApp(App[None]):
             return
         btn.disabled = self.phase == "running" or self._operation_busy
 
+    def _set_metadata_search_controls_disabled(self, disabled: bool) -> None:
+        for button_id in ("btn-more", "btn-sources"):
+            try:
+                self.query_one(f"#{button_id}", Button).disabled = disabled
+            except Exception:
+                pass
+
     def _refresh_import_buttons(self) -> None:
         enabled = (
             self.phase in {"ready", "error"}
@@ -647,13 +669,8 @@ class DiscvaultApp(App[None]):
             and self._disc_info is not None
         )
         try:
-            file_btn = self.query_one("#btn-import-file", Button)
-            file_btn.disabled = not enabled
-        except Exception:
-            pass
-        try:
-            url_btn = self.query_one("#btn-import-url", Button)
-            url_btn.disabled = not enabled
+            import_btn = self.query_one("#btn-import", Button)
+            import_btn.disabled = not enabled
         except Exception:
             pass
         try:
@@ -741,7 +758,14 @@ class DiscvaultApp(App[None]):
             self._tlog(f"[bold red]✗ Metadata error: {exc}[/bold red]")
             self.call_from_thread(self._enter_ready)
 
-    def _run_meta_fetch(self, sources: dict, merge: bool = False) -> None:
+    def _run_meta_fetch(
+        self,
+        sources: dict,
+        merge: bool = False,
+        *,
+        manual_query: str = "",
+        manual_hints: tuple[str, str, str] | None = None,
+    ) -> None:
         """Fetch metadata — runs in a worker thread (called from detect or meta worker).
         If merge=True, new results are added to existing candidates instead of replacing them.
         """
@@ -760,8 +784,11 @@ class DiscvaultApp(App[None]):
         use_mb = sources.get("musicbrainz", True)
         use_gnudb = sources.get("gnudb", True)
         use_discogs = sources.get("discogs", True)
-        hint_artist, hint_album, hint_year = self._manual_search_hints()
-        has_manual_terms = bool(hint_artist and hint_album)
+        hint_artist = hint_album = hint_year = ""
+        if manual_hints:
+            hint_artist, hint_album, hint_year = manual_hints
+        manual_query = manual_query.strip()
+        has_manual_terms = bool(manual_query or hint_artist or hint_album)
         self._last_meta_fetch_all_sources = use_mb and use_gnudb and use_discogs
 
         active = [k for k, v in sources.items() if v] or ["all"]
@@ -802,6 +829,7 @@ class DiscvaultApp(App[None]):
                         hint_artist,
                         hint_album,
                         year=hint_year,
+                        query=manual_query,
                         disc_info=disc_info,
                         timeout=timeout,
                         debug=meta_debug,
@@ -861,6 +889,7 @@ class DiscvaultApp(App[None]):
                         artist=hint_artist,
                         album=hint_album,
                         year=hint_year,
+                        query=manual_query,
                         token=cfg.discogs.token,
                         timeout=timeout,
                         debug=meta_debug,
@@ -871,7 +900,7 @@ class DiscvaultApp(App[None]):
                     self._tlog(f"[dim]  ✗ Discogs: {exc}[/dim]")
             else:
                 self._tlog(
-                    "[dim]  · Discogs: no search terms yet (fill Artist and Album to search manually)[/dim]"
+                    "[dim]  · Discogs: no search terms yet (use Manual Search, or fill tags and search again)[/dim]"
                 )
 
         self._candidates = candidates
@@ -883,23 +912,35 @@ class DiscvaultApp(App[None]):
             if self._last_meta_fetch_all_sources:
                 if has_manual_terms:
                     self._tlog(
-                        "[yellow]![/yellow] No metadata found — adjust Artist/Album and try again, or enter tags manually."
+                        "[yellow]![/yellow] No metadata found — adjust your search terms and try again, or enter tags manually."
                     )
                 else:
                     self._tlog(
-                        "[yellow]![/yellow] No metadata found — enter Artist and Album above, then press Search Metadata to query MusicBrainz/Discogs, or enter tags manually."
+                        "[yellow]![/yellow] No metadata found — use Manual Search to query MusicBrainz/Discogs, or enter tags manually."
                     )
             else:
                 self._tlog(
-                    "[yellow]![/yellow] No metadata found — try another source selection, or fill Artist and Album above and fetch again."
+                    "[yellow]![/yellow] No metadata found — try another source selection, or search again with different terms."
                 )
         self.call_from_thread(self._enter_ready)
 
     @work(thread=True, name="meta")
-    def _start_meta_fetch(self, sources: dict | None = None, merge: bool = False) -> None:
-        """Re-fetch metadata (F5 / Search Metadata button). Runs in its own worker thread."""
+    def _start_meta_fetch(
+        self,
+        sources: dict | None = None,
+        merge: bool = False,
+        *,
+        manual_query: str = "",
+        manual_hints: tuple[str, str, str] | None = None,
+    ) -> None:
+        """Re-fetch metadata (F5 / Manual Search button). Runs in its own worker thread."""
         try:
-            self._run_meta_fetch(sources or self._sources_dict(), merge=merge)
+            self._run_meta_fetch(
+                sources or self._sources_dict(),
+                merge=merge,
+                manual_query=manual_query,
+                manual_hints=manual_hints,
+            )
         except Exception as exc:
             self._tlog(f"[bold red]✗ Metadata error: {exc}[/bold red]")
             self.call_from_thread(self._enter_ready)
@@ -1006,7 +1047,7 @@ class DiscvaultApp(App[None]):
         self._show("metadata-box")
 
         self.query_one("#btn-start", Button).disabled = False
-        self.query_one("#btn-more", Button).disabled = False
+        self._set_metadata_search_controls_disabled(False)
         self._refresh_eject_button()
         self._refresh_output_button()
         self._refresh_import_buttons()
@@ -1147,11 +1188,11 @@ class DiscvaultApp(App[None]):
         if bid == "btn-config":
             self._open_settings()
         elif bid == "btn-more":
+            self._open_manual_search()
+        elif bid == "btn-sources":
             self._open_metadata_search()
-        elif bid == "btn-import-file":
-            self._do_import_file()
-        elif bid == "btn-import-url":
-            self._do_import_url()
+        elif bid == "btn-import":
+            self._do_import()
         elif bid == "btn-manual":
             self._do_manual_entry()
         elif bid == "btn-browse":
@@ -1210,6 +1251,21 @@ class DiscvaultApp(App[None]):
             return
         self.push_screen(SourceSelectScreen(self._sources_dict()), self._apply_search_sources)
 
+    def _open_manual_search(self) -> None:
+        if self.phase == "running" or self._operation_busy:
+            return
+        search_text = self._metadata_search_query
+        self.push_screen(
+            TextPromptScreen(
+                title="Manual Search",
+                label="Search by artist, album, year, or any words.",
+                value=search_text,
+                placeholder="",
+                submit_label="Search",
+            ),
+            self._apply_manual_search_prompt,
+        )
+
     def _open_output_selector(self) -> None:
         if self.phase == "running" or self._operation_busy:
             return
@@ -1232,7 +1288,7 @@ class DiscvaultApp(App[None]):
         self._cover_art_selected = self._cfg.download_cover_art
         self._update_target_input()
         self._update_cover_art_checkbox()
-        self._log("[green]✓[/green] Settings saved. To apply new metadata sources, click [bold]Search Metadata[/bold].")
+        self._log("[green]✓[/green] Settings saved. Use [bold]Manual Search[/bold] to re-run metadata lookup with the current sources.")
 
     def _apply_search_sources(self, sources: dict[str, bool] | None) -> None:
         if sources is None:
@@ -1264,76 +1320,65 @@ class DiscvaultApp(App[None]):
             return
         if self._operation_busy:
             return
+        manual_query, manual_hints = self._manual_search_request()
         self.phase = "detecting"
         self._operation_busy = True
         self._log(f"> Fetching metadata from: {', '.join(active)}")
+        if manual_query:
+            self._log(f"> Search terms: [bold]{manual_query}[/bold]")
         self._candidates = []
         self._selected_idx = 0
         self.query_one("#meta-table", DataTable).clear(columns=True)
         self._set_tracklist_message("[dim](fetching metadata...)[/dim]")
-        self.query_one("#btn-more", Button).disabled = True
+        self._set_metadata_search_controls_disabled(True)
         self.query_one("#btn-start", Button).disabled = True
         self._refresh_eject_button()
         self._refresh_output_button()
         self._refresh_import_buttons()
-        self._start_meta_fetch(sources)
+        self._start_meta_fetch(
+            sources,
+            manual_query=manual_query,
+            manual_hints=manual_hints,
+        )
 
-    def _do_import_file(self) -> None:
+    def _apply_manual_search_prompt(self, value: str | None) -> None:
+        if value is None:
+            return
+        self._metadata_search_query = value.strip()
+        self._do_fetch_metadata()
+
+    def _do_import(self) -> None:
         if self._operation_busy:
             return
         self.push_screen(
-            ImportPromptScreen(
-                title="Import Metadata File",
-                label="Path to a .cue, .toc, .json, or .toml file",
-                value=self._metadata_file_value(),
-                placeholder="/path/to/album.cue",
-                submit_label="Import",
+            MetadataImportPromptScreen(
+                file_value=self._metadata_file_value(),
+                url_value=self._metadata_url_value(),
             ),
-            self._apply_import_file_prompt,
+            self._apply_import_prompt,
         )
 
-    def _do_import_url(self) -> None:
-        if self._operation_busy:
+    def _apply_import_prompt(self, result: tuple[str, str] | None) -> None:
+        if result is None:
             return
-        self.push_screen(
-            ImportPromptScreen(
-                title="Import Metadata URL",
-                label="Supported metadata URL (currently Bandcamp album pages)",
-                value=self._metadata_url_value(),
-                placeholder="https://artist.bandcamp.com/album/album-name",
-                submit_label="Import",
-            ),
-            self._apply_import_url_prompt,
-        )
-
-    def _apply_import_file_prompt(self, value: str | None) -> None:
-        if value is None:
-            return
-        self._metadata_file_path = value
+        kind, value = result
+        if kind == "file":
+            self._metadata_file_path = value
+        else:
+            self._metadata_url = value
         if not value:
-            self._log("[yellow]![/yellow] No metadata file path is set.")
+            self._log("[yellow]![/yellow] No import path is set.")
             self._refresh_output_button()
             self._refresh_import_buttons()
             return
-        self._start_import_from_value("file", value)
-
-    def _apply_import_url_prompt(self, value: str | None) -> None:
-        if value is None:
-            return
-        self._metadata_url = value
-        if not value:
-            self._log("[yellow]![/yellow] No metadata URL is set.")
-            self._refresh_output_button()
-            self._refresh_import_buttons()
-            return
-        self._start_import_from_value("url", value)
+        self._start_import_from_value(kind, value)
 
     def _start_import_from_value(self, kind: str, value: str) -> None:
         if self._operation_busy:
             return
         self.phase = "detecting"
         self._operation_busy = True
-        self.query_one("#btn-more", Button).disabled = True
+        self._set_metadata_search_controls_disabled(True)
         self.query_one("#btn-start", Button).disabled = True
         self._refresh_eject_button()
         self._refresh_import_buttons()
@@ -1376,7 +1421,7 @@ class DiscvaultApp(App[None]):
 
         self._operation_busy = True
         self.query_one("#btn-start", Button).disabled = True
-        self.query_one("#btn-more", Button).disabled = True
+        self._set_metadata_search_controls_disabled(True)
         self._refresh_eject_button()
         self._refresh_output_button()
         self._refresh_import_buttons()
@@ -1560,7 +1605,7 @@ class DiscvaultApp(App[None]):
         self._operation_busy = True
         self._last_accuraterip_status = ""
         self.query_one("#btn-start", Button).disabled = True
-        self.query_one("#btn-more", Button).disabled = True
+        self._set_metadata_search_controls_disabled(True)
         self._refresh_eject_button()
         self._refresh_output_button()
         self._refresh_import_buttons()
@@ -1901,7 +1946,7 @@ class DiscvaultApp(App[None]):
 
         if self.phase == "ready":
             self.query_one("#btn-start", Button).disabled = False
-            self.query_one("#btn-more", Button).disabled = False
+            self._set_metadata_search_controls_disabled(False)
         self._refresh_eject_button()
         self._refresh_output_button()
         self._refresh_import_buttons()
@@ -1998,6 +2043,7 @@ class DiscvaultApp(App[None]):
         self._disc_signature = signature
         self._candidates = []
         self._manual_meta = None
+        self._metadata_search_query = ""
         self._selected_idx = 0
         self._selected_tracks = {}
         self._last_accuraterip_status = ""
@@ -2022,7 +2068,7 @@ class DiscvaultApp(App[None]):
         self.query_one("#meta-table", DataTable).clear(columns=True)
         self._set_tracklist_message("[dim](loading new disc metadata...)[/dim]")
         self.query_one("#btn-start", Button).disabled = True
-        self.query_one("#btn-more", Button).disabled = True
+        self._set_metadata_search_controls_disabled(True)
         self._refresh_eject_button()
         self._refresh_output_button()
         self._refresh_import_buttons()
@@ -2077,7 +2123,7 @@ class DiscvaultApp(App[None]):
         self._watch_disc_present = True
         self._show("progress-section")
         self.query_one("#btn-start", Button).disabled = True
-        self.query_one("#btn-more", Button).disabled = True
+        self._set_metadata_search_controls_disabled(True)
         self._refresh_eject_button()
         self._refresh_output_button()
         self._refresh_import_buttons()
@@ -2159,7 +2205,7 @@ class DiscvaultApp(App[None]):
         self.phase = "error"
         self._operation_busy = False
         self.query_one("#btn-start", Button).disabled = True
-        self.query_one("#btn-more", Button).disabled = True
+        self._set_metadata_search_controls_disabled(True)
         btn = self.query_one("#btn-cancel", Button)
         btn.label = "Quit"
         btn.disabled = False
@@ -2190,6 +2236,7 @@ class DiscvaultApp(App[None]):
         self._watch_disc_present = False
         self._candidates = []
         self._manual_meta = None
+        self._metadata_search_query = ""
         self._selected_idx = 0
         self._selected_tracks = {}
         self._clear_album_fields()
@@ -2208,7 +2255,7 @@ class DiscvaultApp(App[None]):
         self.query_one("#meta-table", DataTable).clear(columns=True)
         self._set_tracklist_message("[dim](insert a disc to load metadata)[/dim]")
         self.query_one("#btn-start", Button).disabled = True
-        self.query_one("#btn-more", Button).disabled = True
+        self._set_metadata_search_controls_disabled(True)
         self._refresh_target_button()
         self._refresh_output_button()
         self._refresh_import_buttons()
@@ -2318,9 +2365,9 @@ class DiscvaultApp(App[None]):
 6. Press **Start** to rip.
 
 ## Tips
-- Use **Import from File** to load a .cue / .toc / .json / .toml metadata file.
-- Use **Import from URL** to fetch metadata from a Bandcamp album page.
-- **Search Metadata** lets you pick which sources to query.
+- Use **Import** to choose either a metadata file or a supported URL, then enter it in a single path field.
+- Use **Manual Search** to open a popup for free-form metadata lookup.
+- **Sources…** lets you choose which metadata providers to query.
 - The disc is polled every 4 s; swap discs anytime from the done screen.
 """
 
