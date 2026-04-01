@@ -7,22 +7,32 @@ The project history starts at `v0.1`.
 ## [Unreleased]
 
 ### Added
+
 - `--check-deps` CLI checklist with distro-aware install hints for DiscVault helper tools.
 - MIT licensing, generated man page, and generated shell completions for `bash`, `zsh`, and `fish`.
 - GitHub Actions CI and tag-driven publish workflows for package builds and PyPI releases.
 - Manual Search and Import popups in the TUI for free-form metadata lookup and unified file/URL imports.
+- Extra-file scanning and selection for supported mixed-mode discs, including a new TUI `Extras` popup and CLI prompts to copy chosen files into `extras/`.
 
 ### Changed
+
 - The default Python package install now includes the Textual TUI instead of requiring a separate extra.
 - Packaging metadata now targets PyPI and `pipx` as the primary release path for Linux installs.
 - TUI metadata actions now use a popup-driven flow for manual searching and importing instead of separate inline/file/url controls.
+- Shared backup runs can now carry selected extra files alongside the normal audio/image outputs without requiring disc-image output to be saved in the library.
+- The TUI header now shows the app version, and the metadata/log areas have been tightened to make the main rip screen more informative.
 
 ### Fixed
+
 - Manual metadata searches now use looser MusicBrainz and Discogs queries so partial titles, punctuation differences, and missing years return candidates more reliably.
+- Extras detection now prefers the mounted disc data session, so the TUI and CLI can find and copy extra files without waiting for metadata or explicit data-track hints.
+- Mixed-mode discs with extra files no longer inflate the visible audio track count or show the trailing data session as a normal audio track.
+- The TUI now surfaces detected extras more clearly with an inline notice, a counted `Extras` button label, and a one-time non-blocking notification.
 
 ## [0.2] - 2026-03-26
 
 ### Added
+
 - Shared backup pipeline used by both the CLI and the TUI.
 - Metadata import from local files and URL-based imports, including Bandcamp URL import.
 - Additional metadata sources and lookup improvements, including Discogs support and clearer source selection flows.
@@ -36,6 +46,7 @@ The project history starts at `v0.1`.
 - Manual real-disc smoke test script for future hardware verification.
 
 ### Changed
+
 - Reworked the TUI layout and workflow around metadata search, imports, output selection, target handling, and progress reporting.
 - Improved drive monitoring so the TUI reacts to disc insertion, removal, and eject events more cleanly and with less drive churn.
 - Moved local CDDB cache behavior behind configuration instead of exposing it as a normal source toggle.
@@ -45,6 +56,7 @@ The project history starts at `v0.1`.
 - Standardized the `0.2` release path around a green automated test suite plus real-drive smoke coverage.
 
 ### Fixed
+
 - Metadata re-fetch in the TUI now uses the current source selection instead of stale defaults.
 - Fixed a TUI busy-state bug that made `Fetch Metadata` appear to do nothing.
 - Fixed CD-Text probing to use valid tooling and more defensible fallbacks.
@@ -61,6 +73,7 @@ The project history starts at `v0.1`.
 ## [0.1] - 2026-03-16
 
 ### Added
+
 - Initial DiscVault TUI ripping workflow.
 - Disc detection, metadata lookup, candidate selection, and rip orchestration for the first release.
 - Core image and audio backup flow with the initial Textual interface.
