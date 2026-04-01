@@ -79,6 +79,10 @@ def wav_dir(album_root: Path) -> Path:
     return album_root / "wav"
 
 
+def extras_dir(album_root: Path) -> Path:
+    return album_root / "extras"
+
+
 def prune_empty_dirs(start: Path, stop_at: Path) -> None:
     """Remove empty directories from *start* up to (but not including) *stop_at*."""
     current = start

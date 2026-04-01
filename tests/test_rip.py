@@ -86,6 +86,39 @@ class ImageExportTests(unittest.TestCase):
         self.assertIsNone(exported_iso)
         self.assertIn("no data track", detail.lower())
 
+    def test_export_iso_from_bin_allows_explicit_track_override(self) -> None:
+        disc_info = DiscInfo(
+            device="/dev/cdrom",
+            track_count=2,
+            track_offsets=[150, 153],
+            leadout=156,
+        )
+
+        audio_payloads = [b"A" * 2048 for _ in range(3)]
+        extra_payloads = [bytes([index]) * 2048 for index in (1, 2, 3)]
+        raw_frames = []
+        for payload in audio_payloads + extra_payloads:
+            sector = bytearray(2352)
+            sector[16:16 + 2048] = payload
+            raw_frames.append(bytes(sector))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bin_path = tmp_path / "disc.bin"
+            iso_path = tmp_path / "disc.iso"
+            bin_path.write_bytes(b"".join(raw_frames))
+
+            exported_iso, detail = export_iso_from_bin(
+                iso_path,
+                bin_path,
+                disc_info,
+                track_no=2,
+            )
+
+            self.assertEqual(detail, "")
+            self.assertEqual(exported_iso, iso_path)
+            self.assertEqual(iso_path.read_bytes(), b"".join(extra_payloads))
+
     def test_rip_image_requires_non_empty_bin_on_success(self) -> None:
         class FakeProc:
             def __init__(self, toc_path: Path, bin_path: Path) -> None:

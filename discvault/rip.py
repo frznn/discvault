@@ -428,17 +428,21 @@ def export_iso_from_bin(
     toc_path: Path | None = None,
     cleanup: Cleanup | None = None,
     progress_callback: Callable[[int, int, str], None] | None = None,
+    track_no: int | None = None,
 ) -> tuple[Path | None, str]:
     """Export a mountable ISO from a single Mode 1 data track in the raw BIN."""
-    data_tracks = disc_info.data_track_numbers
-    if not data_tracks:
-        return None, "ISO export skipped: disc has no data track."
-    if len(data_tracks) != 1:
-        return None, "ISO export skipped: supports discs with exactly one data track."
+    if track_no is None:
+        data_tracks = disc_info.data_track_numbers
+        if not data_tracks:
+            return None, "ISO export skipped: disc has no data track."
+        if len(data_tracks) != 1:
+            return None, "ISO export skipped: supports discs with exactly one data track."
+        track_no = data_tracks[0]
+    elif track_no < 1 or track_no > disc_info.track_count:
+        return None, f"ISO export skipped: invalid track number {track_no}."
     if not disc_info.track_offsets or disc_info.track_count <= 0:
         return None, "ISO export skipped: disc layout is incomplete."
 
-    track_no = data_tracks[0]
     mode_hints = _parse_toc_track_modes(toc_path)
     raw_mode = mode_hints.get(track_no, "").upper()
     if raw_mode and not raw_mode.startswith("MODE1"):

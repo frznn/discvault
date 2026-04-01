@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import datetime
 import subprocess
-from dataclasses import dataclass
+import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
@@ -53,6 +54,9 @@ class BackupRunRequest:
     encode_opts: EncodeOptions
     cleanup: Cleanup
     cover_art_enabled: bool
+    selected_extra_paths: list[str] = field(default_factory=list)
+    extras_iso_path: Path | None = None
+    extras_mount_root: Path | None = None
     # When set, overrides the auto-generated album_root path.
     album_root_override: Path | None = None
 
@@ -67,6 +71,8 @@ class BackupRunResult:
     bin_path: Path | None = None
     iso_path: Path | None = None
     cover_art_path: Path | None = None
+    extras_dir: Path | None = None
+    copied_extra_count: int = 0
 
 
 @dataclass
@@ -92,6 +98,7 @@ IMAGE_RIP_ERROR_PREFIX = "IMAGE_RIP:"
 def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = None) -> BackupRunResult:
     from . import artwork as artwork_mod
     from . import encode as enc_mod
+    from . import extras as extras_mod
     from . import library
     from . import rip as rip_mod
     from . import verify as verify_mod
@@ -119,6 +126,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
     al_dir = library.alac_dir(album_root)
     aa_dir = library.aac_dir(album_root)
     wa_dir = library.wav_dir(album_root)
+    ex_dir = library.extras_dir(album_root)
 
     work_dir = Path(cfg.work_dir)
     work_dir_existed = work_dir.exists()
@@ -129,6 +137,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
     wav_files: list[Path] = []
     accuraterip_detail = ""
     cover_art_path = None
+    copied_extra_paths: list[Path] = []
 
     audio_formats = _audio_formats(outputs)
 
@@ -305,6 +314,107 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
         else:
             _warn(callbacks, "Cover art not downloaded.")
 
+    extra_paths = list(dict.fromkeys(path for path in request.selected_extra_paths if path))
+    if extra_paths:
+        cleanup.track_dir(album_root, created=not album_root_existed)
+        _info(callbacks, f"Saving {len(extra_paths)} extra file(s)...")
+        stage_label = "Saving extra files..."
+        cached_mount_root = (
+            request.extras_mount_root
+            if request.extras_mount_root and request.extras_mount_root.exists()
+            else None
+        )
+        cached_iso = request.extras_iso_path if request.extras_iso_path and request.extras_iso_path.exists() else None
+        _stage_start(
+            callbacks,
+            "extras",
+            stage_label,
+            len(extra_paths) if cached_mount_root is not None or cached_iso is not None or iso_path is not None else None,
+        )
+        temp_workspace: tempfile.TemporaryDirectory[str] | None = None
+        temp_scan_bundle = None
+        extras_iso_path = cached_iso
+        extras_mount_root = cached_mount_root
+        try:
+            if extras_mount_root is not None:
+                copied_extra_paths, detail = extras_mod.copy_mounted_extra_files(
+                    extras_mount_root,
+                    extra_paths,
+                    ex_dir,
+                    cleanup=cleanup,
+                    progress_callback=_progress_callback(callbacks, "extras"),
+                )
+            elif extras_iso_path is None and iso_path is not None and iso_path.exists():
+                extras_iso_path = iso_path
+                copied_extra_paths, detail = extras_mod.copy_extra_files(
+                    extras_iso_path,
+                    extra_paths,
+                    ex_dir,
+                    cleanup=cleanup,
+                    progress_callback=_progress_callback(callbacks, "extras"),
+                )
+            elif extras_iso_path is None and bin_path is not None and bin_path.exists():
+                temp_workspace = tempfile.TemporaryDirectory(prefix="discvault-extras-", dir=str(work_dir))
+                temp_iso_path = Path(temp_workspace.name) / "extras.iso"
+                exported_iso, detail = rip_mod.export_iso_from_bin(
+                    temp_iso_path,
+                    bin_path,
+                    disc_info,
+                    toc_path=toc_path,
+                    progress_callback=_progress_callback(callbacks, "extras"),
+                )
+                if exported_iso is None:
+                    raise BackupRunError(detail or "Extra files failed while exporting the data track.")
+                extras_iso_path = exported_iso
+                copied_extra_paths, detail = extras_mod.copy_extra_files(
+                    extras_iso_path,
+                    extra_paths,
+                    ex_dir,
+                    cleanup=cleanup,
+                    progress_callback=_progress_callback(callbacks, "extras"),
+                )
+            else:
+                temp_scan_bundle, detail = extras_mod.scan_disc_extras(
+                    request.device,
+                    disc_info,
+                    cfg,
+                    meta=request.meta,
+                    work_dir=work_dir,
+                    debug=enc.debug,
+                    process_callback=lambda proc: _set_process(callbacks, proc),
+                    progress_callback=_progress_callback(callbacks, "extras"),
+                )
+                _set_process(callbacks, None)
+                if temp_scan_bundle is None:
+                    raise BackupRunError(detail or "Extra files failed while reading the disc.")
+                if temp_scan_bundle.mount_root is not None:
+                    copied_extra_paths, detail = extras_mod.copy_mounted_extra_files(
+                        temp_scan_bundle.mount_root,
+                        extra_paths,
+                        ex_dir,
+                        cleanup=cleanup,
+                        progress_callback=_progress_callback(callbacks, "extras"),
+                    )
+                else:
+                    extras_iso_path = temp_scan_bundle.iso_path
+                    copied_extra_paths, detail = extras_mod.copy_extra_files(
+                        extras_iso_path,
+                        extra_paths,
+                        ex_dir,
+                        cleanup=cleanup,
+                        progress_callback=_progress_callback(callbacks, "extras"),
+                    )
+            if copied_extra_paths is None:
+                raise BackupRunError(detail or "Extra files failed while copying the selected files.")
+        finally:
+            _set_process(callbacks, None)
+            if temp_scan_bundle is not None:
+                temp_scan_bundle.close()
+            if temp_workspace is not None:
+                temp_workspace.cleanup()
+        _success(callbacks, f"Saved {len(copied_extra_paths)} extra file(s).")
+        _stage_done(callbacks, "extras", "✓ Extra files")
+
     write_backup_info(
         album_root=album_root,
         device=request.device,
@@ -327,6 +437,9 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
         accuraterip_detail=accuraterip_detail,
         cover_art_path=cover_art_path,
         cover_art_enabled=cover_art_enabled,
+        extras_dir=ex_dir if copied_extra_paths else None,
+        copied_extra_paths=copied_extra_paths,
+        selected_extra_paths=extra_paths,
         warn=callbacks.warn,
     )
 
@@ -351,6 +464,8 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
         bin_path=bin_path,
         iso_path=iso_path,
         cover_art_path=cover_art_path,
+        extras_dir=ex_dir if copied_extra_paths else None,
+        copied_extra_count=len(copied_extra_paths),
     )
 
 
@@ -377,6 +492,9 @@ def write_backup_info(
     accuraterip_detail: str,
     cover_art_path: Path | None,
     cover_art_enabled: bool,
+    extras_dir: Path | None,
+    copied_extra_paths: list[Path],
+    selected_extra_paths: list[str],
     warn: Callable[[str], None] | None = None,
 ) -> None:
     info_path = album_root / "backup-info.txt"
@@ -411,6 +529,10 @@ def write_backup_info(
     lines.append(f"ALAC: {'yes' if outputs.alac else 'no'}")
     lines.append(f"AAC/M4A: {'yes' if outputs.aac else 'no'}")
     lines.append(f"WAV copy: {'yes' if outputs.wav else 'no'}")
+    lines.append(f"Extra files selected: {len(selected_extra_paths)}")
+    lines.append(f"Extra files saved: {len(copied_extra_paths)}")
+    if extras_dir is not None:
+        lines.append(f"Extras dir: {extras_dir}")
     lines.append(f"AccurateRip: {'yes' if accuraterip_enabled else 'no'}")
     if accuraterip_detail:
         lines.append(f"AccurateRip result: {accuraterip_detail}")
