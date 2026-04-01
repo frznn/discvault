@@ -62,8 +62,9 @@ jobs:
       - name: pipx smoke test
         run: |
           python -m pipx install --force dist/*.whl
-          "$HOME/.local/bin/discvault" --version
-          "$HOME/.local/bin/discvault" --help > /dev/null
+          PIPX_BIN_DIR="$(python -m pipx environment --value PIPX_BIN_DIR)"
+          "$PIPX_BIN_DIR/discvault" --version
+          "$PIPX_BIN_DIR/discvault" --help > /dev/null
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4
