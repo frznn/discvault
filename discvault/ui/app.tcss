@@ -9,10 +9,18 @@ Button {
 
 #metadata-box {
     height: auto;
-    margin: 1 1 1 1;
+    margin: 0 1 1 1;
     padding: 0 1;
     border: round $surface;
     align: left top;
+}
+
+#metadata-title {
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    text-style: bold;
+    color: $text;
 }
 
 #metadata-left {
@@ -36,10 +44,37 @@ Button {
     margin-right: 1;
 }
 
-#status-log {
-    height: 6;
+#status-log-shell {
+    height: 5;
     margin: 1 1;
+    layers: base overlay;
+}
+
+#status-log {
+    height: 100%;
     border: round $surface;
+    layer: base;
+}
+
+#status-toast {
+    display: none;
+    position: absolute;
+    max-width: 70%;
+    height: auto;
+    padding: 1 1;
+    background: $panel-lighten-1;
+    color: $foreground;
+    border-left: outer $success;
+    layer: overlay;
+    text-align: center;
+}
+
+#status-toast.-warning {
+    border-left: outer $warning;
+}
+
+#status-toast.-error {
+    border-left: outer $error;
 }
 
 /* --- ready phase --- */
@@ -65,6 +100,16 @@ Button {
 #tracklist-section {
     padding: 0 1;
     height: auto;
+}
+
+#extras-notice {
+    height: auto;
+    margin: 1 1 0 1;
+    padding: 0 2;
+    color: $text;
+    border: round $warning;
+    background: $surface;
+    display: none;
 }
 
 .track-row {
@@ -248,6 +293,7 @@ Button {
 #btn-config      { min-width: 12; }
 #btn-target      { width: auto; min-width: 0; margin-left: 0; }
 #btn-outputs     { min-width: 15; margin-left: 1; }
+#btn-extras      { min-width: 0; width: auto; margin-left: 1; }
 #btn-eject       { min-width: 12; margin-left: 2; }
 #btn-start       { min-width: 12; margin-left: 2; }
 #btn-cancel      { min-width: 12; margin-left: 2; }

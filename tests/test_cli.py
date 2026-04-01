@@ -62,6 +62,7 @@ class CliPipelineTests(unittest.TestCase):
                 patch("discvault.device.detect", return_value="/dev/cdrom"), \
                 patch("discvault.device.is_readable", return_value=True), \
                 patch("discvault.disc.load_disc_info", return_value=disc_info), \
+                patch("discvault.extras.probe_disc_extras", return_value=(None, "")), \
                 patch("discvault.metadata.lookup.fetch_candidates", return_value=[meta]), \
                 patch("discvault.rip.rip_image", return_value=(True, "")), \
                 patch("discvault.rip.rip_audio") as rip_audio, \
@@ -125,6 +126,7 @@ class CliPipelineTests(unittest.TestCase):
                 patch("discvault.device.detect", return_value="/dev/cdrom"), \
                 patch("discvault.device.is_readable", return_value=True), \
                 patch("discvault.disc.load_disc_info", return_value=disc_info), \
+                patch("discvault.extras.probe_disc_extras", return_value=(None, "")), \
                 patch("discvault.metadata.lookup.fetch_candidates", return_value=[meta]) as fetch_candidates, \
                 patch("discvault.cli.warn") as warn:
                 _run(args, cfg)

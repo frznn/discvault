@@ -11,7 +11,7 @@ from pathlib import Path
 from . import __version__
 from .cleanup import Cleanup
 from .config import Config, first_run_setup
-from .tracks import compact_track_list, parse_track_spec, resolve_selected_tracks
+from .tracks import compact_track_list, display_track_count, parse_track_spec, resolve_selected_tracks
 from .ui.console import console, log, success, warn, error, step
 
 
@@ -88,6 +88,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     from . import alerts
     from . import device as dev_mod
     from . import disc as disc_mod
+    from . import extras as extras_mod
     from . import library
     from .metadata import lookup as meta_lookup
     from .metadata import urlimport
@@ -95,9 +96,13 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     from .ui.selector import select_candidate
 
     cleanup = Cleanup()
+    extra_scan_bundle = None
+    selected_extra_paths: list[str] = []
 
     def _abort(signum=None, frame=None):
         error("Interrupted — cleaning up...")
+        if extra_scan_bundle is not None:
+            extra_scan_bundle.close()
         cleanup.remove_all()
         sys.exit(130)
 
@@ -150,17 +155,28 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
             error(f"Failed to read disc info: {exc}")
             sys.exit(1)
     disc_info.device = device
+    extra_scan_bundle, extra_probe_detail = extras_mod.probe_disc_extras(device)
+    extra_track_number = extra_scan_bundle.track_number if extra_scan_bundle is not None else None
+    has_data_session = extra_scan_bundle is not None
     log(
-        f"Tracks: {disc_info.track_count}  |  "
+        f"Tracks: {display_track_count(disc_info, extra_track_number=extra_track_number, has_data_session=has_data_session)}  |  "
         f"FreeDB ID: {disc_info.freedb_disc_id or '(none)'}  |  "
         f"MB ID: {disc_info.mb_disc_id or '(none)'}"
     )
     if disc_info.data_track_numbers:
-        warn(
-            "Data track(s) detected and excluded by default: "
-            f"{compact_track_list(disc_info.data_track_numbers)}"
-        )
-    selected_tracks = resolve_selected_tracks(disc_info, requested_tracks)
+        warn("This disc may include extra files.")
+        if sys.stdin.isatty():
+            log("Tip: you can scan for extra files and choose what to copy into extras/.")
+    if extra_scan_bundle is not None:
+        success(extra_probe_detail)
+        if sys.stdin.isatty():
+            log("Tip: use the extras picker to choose files to copy into extras/.")
+    selected_tracks = resolve_selected_tracks(
+        disc_info,
+        requested_tracks,
+        extra_track_number=extra_track_number,
+        has_data_session=has_data_session,
+    )
     if not selected_tracks:
         error("No audio tracks remain selected. Adjust --tracks or choose a disc with audio tracks.")
         sys.exit(1)
@@ -277,6 +293,11 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
             warn(f"Year '{year}' doesn't look like a 4-digit year; clearing it.")
             year = ""
 
+        selected_tracks = resolve_selected_tracks(disc_info, requested_tracks, meta)
+        if not selected_tracks:
+            error("No audio tracks remain selected. Adjust --tracks or choose a disc with audio tracks.")
+            sys.exit(1)
+
         # --- 4c. Confirm before starting ---
         if sys.stdin.isatty() and not args.dry_run:
             while True:
@@ -287,10 +308,20 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
                     album_root,
                     do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav,
                     args.flac_compression, args.mp3_bitrate, cfg.opus_bitrate, cfg.aac_bitrate,
+                    len(selected_extra_paths),
                     target_dir_override,
                 )
                 if action == "proceed":
                     break
+                elif action == "extras":
+                    selected_extra_paths, extra_scan_bundle = _select_extra_files_cli(
+                        device,
+                        disc_info,
+                        cfg,
+                        meta=meta,
+                        debug=args.debug,
+                        existing_bundle=extra_scan_bundle,
+                    )
                 elif action == "edit":
                     artist, album, year = _edit_tags(artist, album, year)
                     if meta:
@@ -340,7 +371,8 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         _dry_run_summary(
             args, cfg, device, artist, album, year,
             meta, album_root, img_dir, fl_dir, mp_dir, og_dir, op_dir, al_dir, aa_dir, wa_dir,
-            do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, selected_tracks,
+            do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav,
+            selected_tracks, len(selected_extra_paths),
         )
         return
 
@@ -378,18 +410,26 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
                 year=year,
                 outputs=outputs,
                 selected_tracks=selected_tracks,
-                cfg=cfg,
-                encode_opts=encode_opts,
-                cleanup=cleanup,
-                cover_art_enabled=cfg.download_cover_art,
-                album_root_override=target_dir_override,
-            ),
-            callbacks,
-        )
+                    cfg=cfg,
+                    encode_opts=encode_opts,
+                    cleanup=cleanup,
+                    cover_art_enabled=cfg.download_cover_art,
+                    selected_extra_paths=selected_extra_paths,
+                    extras_iso_path=extra_scan_bundle.iso_path if extra_scan_bundle is not None else None,
+                    extras_mount_root=extra_scan_bundle.mount_root if extra_scan_bundle is not None else None,
+                    album_root_override=target_dir_override,
+                ),
+                callbacks,
+            )
     except BackupRunError as exc:
+        if extra_scan_bundle is not None:
+            extra_scan_bundle.close()
         cleanup.remove_all()
         error(str(exc))
         sys.exit(1)
+
+    if extra_scan_bundle is not None:
+        extra_scan_bundle.close()
 
     sound_ok = alerts.play_completion_sound(cfg.completion_sound)
     notify_ok = alerts.send_desktop_notification(
@@ -400,6 +440,8 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         warn("Completion sound unavailable.")
     if not notify_ok:
         warn("Desktop notifications unavailable.")
+    if result.copied_extra_count and result.extras_dir is not None:
+        success(f"Extra files saved: {result.copied_extra_count} -> {result.extras_dir}")
     success(f"Done! Files saved to: {result.album_root}")
 
 
@@ -462,12 +504,13 @@ def _confirm_before_start(
     mp3_bitrate: int,
     opus_bitrate: int,
     aac_bitrate: int,
+    selected_extra_count: int,
     target_dir_override: Path | None = None,
 ) -> tuple[str, bool, bool, bool, bool, bool, bool, bool, bool, bool, Path | None]:
     """
     Show a pre-rip summary with toggleable outputs.
     Returns (action, do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, target_dir_override).
-    action is one of: 'proceed', 'edit', 'back'.
+    action is one of: 'proceed', 'extras', 'edit', 'back'.
     """
     while True:
         def _check(val: bool) -> str:
@@ -496,10 +539,11 @@ def _confirm_before_start(
         console.print(f"    [{_check(do_alac)}] 7. ALAC        (m4a)")
         console.print(f"    [{_check(do_aac)}] 8. AAC/M4A     ({aac_bitrate} kbps)")
         console.print(f"    [{_check(do_wav)}] 9. WAV copy")
+        console.print(f"  Extra files:      {selected_extra_count} selected")
 
         try:
             answer = console.input(
-                "\nProceed? [Y=yes, 1-9=toggle output, d=change dir, e=edit tags, b=back, q=quit]: "
+                "\nProceed? [Y=yes, 1-9=toggle output, x=extras, d=change dir, e=edit tags, b=back, q=quit]: "
             ).strip().lower()
         except (EOFError, KeyboardInterrupt):
             sys.exit(0)
@@ -508,8 +552,8 @@ def _confirm_before_start(
             if do_iso and not do_image:
                 warn("ISO export requires disc image output.")
                 continue
-            if not any((do_image, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav)):
-                warn("Nothing to do — enable at least one output.")
+            if not any((do_image, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav)) and not selected_extra_count:
+                warn("Nothing to do — enable at least one output or select extra files.")
                 continue
             return "proceed", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, target_dir_override
         elif answer == "1":
@@ -530,6 +574,8 @@ def _confirm_before_start(
             do_aac = not do_aac
         elif answer == "9":
             do_wav = not do_wav
+        elif answer in ("x", "extras"):
+            return "extras", do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav, target_dir_override
         elif answer in ("d", "dir"):
             try:
                 current = str(target_dir_override) if target_dir_override else ""
@@ -553,7 +599,7 @@ def _confirm_before_start(
             log("Aborted.")
             sys.exit(0)
         else:
-            console.print("[warning]Please enter Y, 1-9, d, e, b, or q.[/warning]")
+            console.print("[warning]Please enter Y, 1-9, x, d, e, b, or q.[/warning]")
 
 
 def _edit_tags(artist: str, album: str, year: str) -> tuple[str, str, str]:
@@ -573,6 +619,70 @@ def _edit_tags(artist: str, album: str, year: str) -> tuple[str, str, str]:
     return artist, album, year
 
 
+def _select_extra_files_cli(
+    device: str,
+    disc_info,
+    cfg: Config,
+    *,
+    meta=None,
+    debug: bool = False,
+    existing_bundle=None,
+):
+    from . import extras as extras_mod
+
+    bundle = existing_bundle
+    if bundle is None:
+        try:
+            answer = console.input("Scan extra files from the disc? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer not in ("y", "yes"):
+            return [], None
+
+        log("Scanning extra files from the disc...")
+        bundle, detail = extras_mod.scan_disc_extras(
+            device,
+            disc_info,
+            cfg,
+            meta=meta,
+            work_dir=Path(cfg.work_dir),
+            debug=debug,
+        )
+        if bundle is None:
+            warn(detail)
+            return [], None
+        success(detail)
+
+    console.print("\n[bold]Extra files[/bold]")
+    for index, entry in enumerate(bundle.entries, start=1):
+        console.print(f"  {index:>2}. {entry.path} ({extras_mod.human_size(entry.size)})")
+
+    while True:
+        try:
+            answer = console.input(
+                "Select extra files [Enter=none, all, or 1-3,5]: "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+
+        if not answer:
+            return [], bundle
+        if answer == "all":
+            return [entry.path for entry in bundle.entries], bundle
+        try:
+            chosen = parse_track_spec(answer)
+        except ValueError:
+            warn("Invalid selection. Use formats like 1-3 or 1,4,9.")
+            continue
+
+        max_index = len(bundle.entries)
+        invalid = [num for num in chosen if num < 1 or num > max_index]
+        if invalid:
+            warn(f"Ignored out-of-range entries: {compact_track_list(invalid)}")
+        selected = [bundle.entries[num - 1].path for num in chosen if 1 <= num <= max_index]
+        return selected, bundle
+
+
 # ---------------------------------------------------------------------------
 # Dry-run summary
 # ---------------------------------------------------------------------------
@@ -581,7 +691,7 @@ def _dry_run_summary(
     args, cfg, device, artist, album, year, meta, album_root,
     img_dir, fl_dir, mp_dir, og_dir, op_dir, al_dir, aa_dir, wa_dir,
     do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav,
-    selected_tracks,
+    selected_tracks, selected_extra_count,
 ) -> None:
     console.print("\n[bold yellow]Dry-run mode — no disc access or files written.[/bold yellow]")
     console.print(f"  Device:      {device}")
@@ -610,6 +720,9 @@ def _dry_run_summary(
         console.print(f"  AAC dir:     {aa_dir}")
     if do_wav:
         console.print(f"  WAV dir:     {wa_dir}")
+    if selected_extra_count:
+        console.print(f"  Extras dir:  {album_root / 'extras'}")
+        console.print(f"  Extras:      {selected_extra_count} selected")
     console.print(f"  Work dir:    {cfg.work_dir}")
     console.print(f"  Sample off:  {cfg.cdparanoia_sample_offset}")
     console.print(f"  AccurateRip: {'yes' if cfg.accuraterip_enabled else 'no'}")

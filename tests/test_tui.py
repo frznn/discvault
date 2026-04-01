@@ -1,22 +1,73 @@
 from __future__ import annotations
 
+import inspect
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from argparse import Namespace
 
 from discvault.config import Config
+from discvault import __version__
+from discvault.metadata.types import DiscInfo, Metadata, Track
 from discvault.ui.tui import _folder_open_command
+from discvault.ui.tui import _extras_announcement_text
+from discvault.ui.tui import _extras_button_label
+from discvault.ui.tui import _extras_notice_text
 from discvault.ui.tui import _needs_overwrite_confirmation
 from discvault.ui.tui import _output_stage_label
+from discvault.ui.tui import StatusRichLog
 from discvault.ui.tui import _target_button_destination
 from discvault.ui.tui import _target_label_text
 from discvault.ui.tui import DiscvaultApp
 
 
 class TuiHelpersTests(unittest.TestCase):
+    def test_status_log_scrolls_one_line_per_pointer_step(self) -> None:
+        log = StatusRichLog()
+
+        with patch.object(log, "_scroll_to", return_value=True) as scroll_to:
+            log._scroll_down_for_pointer()
+            scroll_to.assert_called_once()
+            self.assertEqual(scroll_to.call_args.kwargs["y"], 1)
+
+        with patch.object(log, "_scroll_to", return_value=True) as scroll_to:
+            log._scroll_up_for_pointer()
+            scroll_to.assert_called_once()
+            self.assertEqual(scroll_to.call_args.kwargs["y"], -1)
+
+    def test_title_bar_includes_version(self) -> None:
+        self.assertEqual(DiscvaultApp.TITLE, "DiscVault")
+        self.assertEqual(DiscvaultApp.SUB_TITLE, f"v{__version__}")
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        self.assertEqual(str(app.format_title(app.TITLE, app.SUB_TITLE)), f"DiscVault v{__version__}")
+
+    def test_compose_includes_metadata_title(self) -> None:
+        self.assertIn('Label("Metadata", id="metadata-title")', inspect.getsource(DiscvaultApp.compose))
+
     def test_folder_open_command_prefers_xdg_open(self) -> None:
         with patch("discvault.ui.tui.shutil.which") as which:
             which.side_effect = lambda name: {
@@ -132,6 +183,100 @@ class TuiHelpersTests(unittest.TestCase):
         self.assertEqual(_output_stage_label("wav", "WAV"), "Saving tracks to WAV format")
         self.assertEqual(_output_stage_label("flac", "FLAC"), "Encoding tracks to FLAC format")
 
+    def test_extras_button_label_prefers_available_count(self) -> None:
+        self.assertEqual(_extras_button_label(0, 2), "Extras (2)")
+        self.assertEqual(_extras_button_label(1, 2), "Extras (1/2)")
+        self.assertEqual(_extras_button_label(0, 0), "Extras")
+
+    def test_extras_notice_text_reports_count_and_selection(self) -> None:
+        self.assertIn("2", _extras_notice_text(0, 2, has_data_session=True))
+        self.assertIn("selected for copy", _extras_notice_text(1, 2, has_data_session=True))
+        fallback = _extras_notice_text(0, 0, has_data_session=True)
+        self.assertIn("extra files", fallback)
+        self.assertIn("Extras", fallback)
+        self.assertNotIn("Extras…", fallback)
+
+    def test_extras_announcement_text_prefers_available_count(self) -> None:
+        with_count = _extras_announcement_text(3, has_data_session=True)
+        self.assertIn("3 extra files", with_count)
+        self.assertIn("Open Extras", with_count)
+        self.assertNotIn("Extras…", with_count)
+        fallback = _extras_announcement_text(0, has_data_session=True)
+        self.assertIn("extra files", fallback)
+        self.assertEqual(_extras_announcement_text(0, has_data_session=False), "")
+
+    def test_announce_uses_embedded_status_toast(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+
+        with patch.object(app, "_show_status_toast") as show:
+            app._announce("Ready")
+            show.assert_called_once_with("Ready", severity="information")
+
+        with patch.object(app, "_show_status_toast") as show:
+            app._announce("Careful", severity="warning")
+            show.assert_called_once_with("Careful", severity="warning")
+
+        with patch.object(app, "_show_status_toast") as show:
+            app._announce("Nope", severity="error")
+            show.assert_called_once_with("Nope", severity="error")
+
+    def test_extras_announcement_waits_until_ready(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._disc_signature = ("disc",)
+        app._extra_scan_bundle = SimpleNamespace(entries=[object(), object()])
+        app.phase = "detecting"
+
+        with patch.object(app, "_announce") as announce:
+            app._maybe_notify_extras()
+            announce.assert_not_called()
+
+            app.phase = "ready"
+            app._maybe_notify_extras()
+            announce.assert_called_once()
+            self.assertEqual(app._extras_announced_signature, ("disc",))
+
     def test_target_button_destination_uses_library_when_target_missing(self) -> None:
         with TemporaryDirectory() as tmpdir:
             library_root = Path(tmpdir)
@@ -172,11 +317,55 @@ class TuiHelpersTests(unittest.TestCase):
             (flac_dir / "01 - Track.flac").write_text("x")
             self.assertTrue(_needs_overwrite_confirmation(album_root, {"flac": True}))
 
+    def test_needs_overwrite_confirmation_for_non_empty_extras_dir(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            album_root = Path(tmpdir) / "Artist" / "Album"
+            extras_dir = album_root / "extras"
+            extras_dir.mkdir(parents=True)
+            (extras_dir / "README.TXT").write_text("x")
+            self.assertTrue(_needs_overwrite_confirmation(album_root, {"extras": True}))
+
     def test_target_label_text_is_empty_without_artist_and_album(self) -> None:
         self.assertEqual(_target_label_text("/music", "", "", ""), "")
 
     def test_target_label_text_formats_target_dir(self) -> None:
         self.assertIn("Target Dir:", _target_label_text("/music", "Artist", "Album", "2000"))
+
+    def test_ensure_meta_tracks_omits_trailing_extra_track_from_editor(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._disc_info = DiscInfo(device="/dev/cdrom", track_count=13)
+        meta = Metadata(
+            source="MusicBrainz",
+            album_artist="Artist",
+            album="Album",
+            tracks=[Track(number=number, title=f"Track {number}") for number in range(1, 13)],
+        )
+
+        tracks = app._ensure_meta_tracks(meta)
+
+        self.assertEqual([track.number for track in tracks], list(range(1, 13)))
+        self.assertEqual(app._possible_extra_tracks(meta), [13])
 
 
 if __name__ == "__main__":

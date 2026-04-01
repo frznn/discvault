@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.content import Content
+from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.containers import ScrollableContainer
 from textual.widgets import (
@@ -28,12 +29,22 @@ from textual import on, work
 
 if TYPE_CHECKING:
     from ..config import Config
+    from ..extras import ExtraScanBundle
     from ..metadata.types import Metadata, DiscInfo
 
 from ..metadata.search import combine_search_text
+from .. import __version__
 from ..pipeline import _output_stage_label
-from ..tracks import compact_track_list, default_selected_tracks, parse_track_spec, resolve_selected_tracks
+from ..tracks import (
+    compact_track_list,
+    display_track_count,
+    effective_audio_track_numbers,
+    parse_track_spec,
+    possible_data_track_numbers,
+    resolve_selected_tracks,
+)
 from .confirm import ConfirmScreen, _copy_to_clipboard
+from .extras_select import ExtrasSelectScreen
 from .folder_picker import FolderPickerScreen
 from .import_prompt import MetadataImportPromptScreen, TextPromptScreen
 from .output_select import OutputSelectScreen
@@ -47,6 +58,54 @@ from .source_select import SourceSelectScreen
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
+
+
+class StatusRichLog(RichLog):
+    """RichLog with one-line mouse-wheel scrolling."""
+
+    def _scroll_down_for_pointer(
+        self,
+        *,
+        animate: bool = True,
+        speed: float | None = None,
+        duration: float | None = None,
+        easing=None,
+        force: bool = False,
+        on_complete=None,
+        level="basic",
+    ) -> bool:
+        return self._scroll_to(
+            y=self.scroll_target_y + 1,
+            animate=animate,
+            speed=speed,
+            duration=duration,
+            easing=easing,
+            force=force,
+            on_complete=on_complete,
+            level=level,
+        )
+
+    def _scroll_up_for_pointer(
+        self,
+        *,
+        animate: bool = True,
+        speed: float | None = None,
+        duration: float | None = None,
+        easing=None,
+        force: bool = False,
+        on_complete=None,
+        level="basic",
+    ) -> bool:
+        return self._scroll_to(
+            y=self.scroll_target_y - 1,
+            animate=animate,
+            speed=speed,
+            duration=duration,
+            easing=easing,
+            force=force,
+            on_complete=on_complete,
+            level=level,
+        )
 
 
 def _folder_open_command(path: Path) -> list[str] | None:
@@ -81,6 +140,46 @@ def _target_label_text(base_dir: str, artist: str, album: str, year: str) -> str
     return f"Target Dir: {target}"
 
 
+def _extras_button_label(selected_count: int, available_count: int) -> str:
+    if available_count > 0:
+        if selected_count > 0:
+            return f"Extras ({selected_count}/{available_count})"
+        return f"Extras ({available_count})"
+    if selected_count > 0:
+        return f"Extras ({selected_count})"
+    return "Extras"
+
+
+def _extras_notice_text(selected_count: int, available_count: int, *, has_data_session: bool) -> str:
+    if available_count > 0:
+        noun = "file" if available_count == 1 else "files"
+        if selected_count > 0:
+            verb = "is" if selected_count == 1 else "are"
+            return (
+                f"[yellow]This disc includes [bold]{available_count}[/bold] extra {noun}.[/yellow] "
+                f"[bold]{selected_count}[/bold] {verb} selected for copy."
+            )
+        return (
+            f"[yellow]This disc includes [bold]{available_count}[/bold] extra {noun}.[/yellow] "
+            "Open [bold]Extras[/bold] to review them."
+        )
+    if has_data_session:
+        return (
+            "[yellow]This disc may include extra files.[/yellow] "
+            "Open [bold]Extras[/bold] to inspect them."
+        )
+    return ""
+
+
+def _extras_announcement_text(available_count: int, *, has_data_session: bool) -> str:
+    if available_count > 0:
+        noun = "file" if available_count == 1 else "files"
+        return f"This disc includes {available_count} extra {noun}. Open Extras to review them."
+    if has_data_session:
+        return "This disc may include extra files. Open Extras to inspect them."
+    return ""
+
+
 def _dir_has_files(d: Path) -> bool:
     try:
         return any(True for p in d.iterdir() if p.is_file())
@@ -105,6 +204,7 @@ def _needs_overwrite_confirmation(album_root: Path, outputs: dict[str, bool] | N
         "alac": True,
         "aac": True,
         "wav": True,
+        "extras": True,
     }
     dirs = []
     if outputs.get("image") or outputs.get("iso"):
@@ -123,10 +223,12 @@ def _needs_overwrite_confirmation(album_root: Path, outputs: dict[str, bool] | N
         dirs.append(library.aac_dir(album_root))
     if outputs.get("wav"):
         dirs.append(library.wav_dir(album_root))
+    if outputs.get("extras"):
+        dirs.append(library.extras_dir(album_root))
     return any(_dir_has_files(d) for d in dirs)
 
 
-_PROGRESS_KEYS = ("image", "iso", "rip", "flac", "mp3", "ogg", "opus", "alac", "aac", "wav")
+_PROGRESS_KEYS = ("image", "iso", "rip", "flac", "mp3", "ogg", "opus", "alac", "aac", "wav", "extras")
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
@@ -156,6 +258,7 @@ class DiscvaultApp(App[None]):
 
     CSS_PATH = "app.tcss"
     TITLE = "DiscVault"
+    SUB_TITLE = f"v{__version__}"
     COMMAND_PALETTE_BINDING = "ctrl+k"
     CTRL_C_HIT = False  # prevent Textual's built-in Ctrl+C exit; handled by our binding
 
@@ -179,6 +282,11 @@ class DiscvaultApp(App[None]):
 
     # Current phase: init | detecting | ready | running | done | error
     phase: reactive[str] = reactive("init")
+
+    def format_title(self, title: str, sub_title: str) -> Content:
+        if sub_title:
+            return Content.assemble(Content(title), (" ", "dim"), Content(sub_title).stylize("dim"))
+        return Content(title)
 
     def __init__(self, args, cfg: "Config") -> None:
         super().__init__()
@@ -229,6 +337,10 @@ class DiscvaultApp(App[None]):
         self._out_wav = bool(getattr(args, "wav", False))
         self._cover_art_selected = bool(cfg.download_cover_art)
         self._cover_art_available = False
+        self._extra_scan_bundle: ExtraScanBundle | None = None
+        self._selected_extra_paths: list[str] = []
+        self._extras_announced_signature: tuple | None = None
+        self._status_toast_timer = None
         self._metadata_search_query = ""
         self._metadata_file_path = getattr(args, "metadata_file", "") or ""
         self._metadata_url = getattr(args, "metadata_url", getattr(args, "bandcamp_url", "")) or ""
@@ -246,10 +358,8 @@ class DiscvaultApp(App[None]):
 
         with Vertical(id="outer"):
             with ScrollableContainer(id="main-scroll"):
-                # Always-visible status log
-                yield RichLog(id="status-log", highlight=True, markup=True, max_lines=200)
-
                 with Vertical(id="metadata-box"):
+                    yield Label("Metadata", id="metadata-title")
                     with Vertical(id="metadata-left"):
                         with Vertical(id="candidates-section"):
                             yield DataTable(id="meta-table", cursor_type="row", zebra_stripes=True)
@@ -275,6 +385,8 @@ class DiscvaultApp(App[None]):
                 # Ready phase: tracklist of selected candidate (scrollable)
                 with ScrollableContainer(id="tracklist-scroll"):
                     yield Vertical(id="tracklist-section")
+
+                yield Static("", id="extras-notice", markup=True)
 
                 with Horizontal(id="target-row"):
                     yield Label("Destination", classes="tag-lbl")
@@ -333,16 +445,27 @@ class DiscvaultApp(App[None]):
                             yield Label("", id="prog-wav-lbl", classes="prog-lbl")
                             yield LoadingIndicator(id="prog-wav-spin", classes="prog-spin")
                         yield ProgressBar(id="prog-wav", show_eta=False)
+                    with Vertical(id="prog-extras-row", classes="prog-row"):
+                        with Horizontal(classes="prog-lbl-row"):
+                            yield Label("", id="prog-extras-lbl", classes="prog-lbl")
+                            yield LoadingIndicator(id="prog-extras-spin", classes="prog-spin")
+                        yield ProgressBar(id="prog-extras", show_eta=False)
 
                 # Done phase: summary
                 with Vertical(id="done-section"):
                     yield Label("", id="done-title", markup=True)
                     yield Static("", id="done-details", markup=True)
 
+            # Always-visible status log
+            with Container(id="status-log-shell"):
+                yield StatusRichLog(id="status-log", highlight=True, markup=True, max_lines=200)
+                yield Static("", id="status-toast", markup=False)
+
             # Action bar — inside #outer, always visible below the scroll area
             with Horizontal(id="action-bar"):
                 yield Button("Settings", id="btn-config")
                 yield Button("Select Outputs", id="btn-outputs")
+                yield Button("Extras", id="btn-extras", disabled=True)
                 with Horizontal(id="action-right"):
                     yield Button("Open Library", id="btn-target", disabled=True)
                     yield Button("Eject CD", id="btn-eject", disabled=True)
@@ -358,6 +481,7 @@ class DiscvaultApp(App[None]):
         self._refresh_eject_button()
         self._refresh_target_button()
         self._refresh_output_button()
+        self._refresh_extras_button()
         self._refresh_import_buttons()
         self._start_detection(self._sources_dict())
 
@@ -385,6 +509,56 @@ class DiscvaultApp(App[None]):
     def _tlog(self, msg: str) -> None:
         """Thread-safe log."""
         self.call_from_thread(self._log, msg)
+
+    def _hide_status_toast(self) -> None:
+        try:
+            toast = self.query_one("#status-toast", Static)
+        except Exception:
+            return
+        toast.update("")
+        toast.remove_class("-information", "-warning", "-error")
+        toast.styles.display = "none"
+        self._status_toast_timer = None
+
+    def _show_status_toast(
+        self,
+        message: str,
+        *,
+        severity: str = "information",
+        duration: float = 4.0,
+    ) -> None:
+        try:
+            shell = self.query_one("#status-log-shell", Container)
+            toast = self.query_one("#status-toast", Static)
+        except Exception:
+            return
+        if self._status_toast_timer is not None:
+            self._status_toast_timer.stop()
+            self._status_toast_timer = None
+        toast.update(message)
+        toast.remove_class("-information", "-warning", "-error", update=False)
+        toast.add_class(f"-{severity}")
+        shell_width = max(shell.size.width, 20)
+        shell_height = max(shell.size.height, 1)
+        right_padding = 4
+        max_width = max(20, shell_width - (right_padding + 4))
+        toast_width = min(max_width, max(20, len(message) + 4))
+        toast_height = 3
+        toast.styles.width = toast_width
+        toast.styles.offset = (
+            max(0, shell_width - toast_width - right_padding),
+            max(0, (shell_height - toast_height) // 2),
+        )
+        toast.styles.display = "block"
+        self._status_toast_timer = self.set_timer(duration, self._hide_status_toast)
+
+    def _announce(self, message: str, *, severity: str = "info") -> None:
+        severity_name = "information"
+        if severity == "warning":
+            severity_name = "warning"
+        elif severity == "error":
+            severity_name = "error"
+        self._show_status_toast(message, severity=severity_name)
 
     def _disc_sig(self, disc_info: "DiscInfo") -> tuple:
         return (
@@ -440,33 +614,86 @@ class DiscvaultApp(App[None]):
         return bool(query or hints[0] or hints[1])
 
     def _track_is_audio(self, track_number: int) -> bool:
-        return self._disc_info.is_audio_track(track_number) if self._disc_info else True
+        if self._disc_info is None:
+            return True
+        return track_number in self._effective_audio_tracks()
+
+    def _track_hint_kwargs(self) -> dict[str, object]:
+        bundle = self._extra_scan_bundle
+        return {
+            "extra_track_number": bundle.track_number if bundle is not None else None,
+            "has_data_session": bundle is not None,
+        }
+
+    def _display_track_count(self, meta: Metadata | None = None) -> int:
+        if self._disc_info is None:
+            return len(meta.tracks) if meta is not None else 0
+        return display_track_count(
+            self._disc_info,
+            meta or self._current_meta(),
+            **self._track_hint_kwargs(),
+        )
+
+    def _effective_audio_tracks(self, meta: Metadata | None = None) -> list[int]:
+        if self._disc_info is None:
+            if meta is None:
+                return []
+            return sorted(
+                {
+                    track.number
+                    for track in meta.tracks
+                    if track.number > 0
+                }
+            )
+        return effective_audio_track_numbers(
+            self._disc_info,
+            meta or self._current_meta(),
+            **self._track_hint_kwargs(),
+        )
+
+    def _possible_extra_tracks(self, meta: Metadata | None = None) -> list[int]:
+        if self._disc_info is None:
+            return []
+        return possible_data_track_numbers(
+            self._disc_info,
+            meta or self._current_meta(),
+            **self._track_hint_kwargs(),
+        )
 
     def _sync_track_selection(self) -> None:
         if self._disc_info is None:
             self._selected_tracks = {}
             return
 
+        audio_tracks = set(self._effective_audio_tracks())
         if self._requested_tracks is None:
-            defaults = set(default_selected_tracks(self._disc_info))
+            defaults = set(audio_tracks)
         else:
-            defaults = set(resolve_selected_tracks(self._disc_info, self._requested_tracks))
+            defaults = set(
+                resolve_selected_tracks(
+                    self._disc_info,
+                    self._requested_tracks,
+                    self._current_meta(),
+                    **self._track_hint_kwargs(),
+                )
+            )
         self._selected_tracks = {
             track_number: self._selected_tracks.get(track_number, track_number in defaults)
             for track_number in range(1, self._disc_info.track_count + 1)
         }
         for track_number in list(self._selected_tracks):
-            if not self._track_is_audio(track_number):
+            if track_number not in audio_tracks:
                 self._selected_tracks[track_number] = False
 
     def _selected_audio_tracks(self) -> list[int]:
         if self._disc_info is None:
             return sorted(track for track, enabled in self._selected_tracks.items() if enabled)
         self._sync_track_selection()
+        audio_tracks = set(self._effective_audio_tracks())
         return [
             track_number
             for track_number in range(1, self._disc_info.track_count + 1)
-            if self._selected_tracks.get(track_number, False) and self._track_is_audio(track_number)
+            if self._selected_tracks.get(track_number, False) and track_number in audio_tracks
         ]
 
     def _set_tracklist_message(self, message: str) -> None:
@@ -510,13 +737,14 @@ class DiscvaultApp(App[None]):
     def _ensure_meta_tracks(self, meta: Metadata) -> list:
         from ..metadata.types import Track
 
-        total_tracks = 0
-        if self._disc_info is not None:
-            total_tracks = self._disc_info.track_count
-        if total_tracks <= 0 and meta.tracks:
-            total_tracks = max(t.number for t in meta.tracks)
+        track_numbers = self._effective_audio_tracks(meta)
+        if not track_numbers:
+            if self._disc_info is not None and self._disc_info.track_count > 0:
+                track_numbers = list(range(1, self._display_track_count(meta) + 1))
+            elif meta.tracks:
+                track_numbers = sorted({track.number for track in meta.tracks if track.number > 0})
 
-        if total_tracks <= 0:
+        if not track_numbers:
             meta.tracks = sorted(meta.tracks, key=lambda track: track.number)
             return meta.tracks
 
@@ -525,14 +753,11 @@ class DiscvaultApp(App[None]):
             existing.get(number)
             or Track(
                 number=number,
-                title="DATA" if self._disc_info and not self._disc_info.is_audio_track(number) else "",
+                title="",
                 artist="",
             )
-            for number in range(1, total_tracks + 1)
+            for number in track_numbers
         ]
-        for track in meta.tracks:
-            if self._disc_info and not self._disc_info.is_audio_track(track.number) and not track.title:
-                track.title = "DATA"
         return meta.tracks
 
     def _render_track_editor(self, meta: Metadata | None) -> None:
@@ -554,26 +779,22 @@ class DiscvaultApp(App[None]):
         for track in tracks:
             secs = track_lengths.get(track.number, 0)
             length = f"{secs // 60}:{secs % 60:02d}" if secs else ""
-            is_audio = self._track_is_audio(track.number)
-            kind = "" if is_audio else "DATA"
             rows.append(
                 Horizontal(
                     Checkbox(
                         "",
-                        value=self._selected_tracks.get(track.number, is_audio),
+                        value=self._selected_tracks.get(track.number, True),
                         id=f"track-enabled-{track.number}",
                         classes="track-enable",
-                        disabled=not is_audio,
                         compact=True,
                     ),
                     Label(f"{track.number:02d}.", classes="track-no"),
                     Input(
                         value=track.title,
-                        placeholder="Title" if is_audio else "DATA",
+                        placeholder="Title",
                         id=f"track-title-{track.number}",
                         classes="track-title track-edit",
                         compact=True,
-                        disabled=not is_audio,
                     ),
                     Input(
                         value=track.artist,
@@ -581,10 +802,9 @@ class DiscvaultApp(App[None]):
                         id=f"track-artist-{track.number}",
                         classes="track-artist track-edit",
                         compact=True,
-                        disabled=not is_audio,
                     ),
                     Label(length, classes="track-len"),
-                    Label(kind, classes="track-kind"),
+                    Label("", classes="track-kind"),
                     classes="track-row",
                 )
             )
@@ -655,6 +875,60 @@ class DiscvaultApp(App[None]):
             return
         btn.disabled = self.phase == "running" or self._operation_busy
 
+    def _refresh_extras_button(self) -> None:
+        try:
+            btn = self.query_one("#btn-extras", Button)
+        except Exception:
+            return
+
+        selected_count = len(self._selected_extra_paths)
+        available_count = len(self._extra_scan_bundle.entries) if self._extra_scan_bundle is not None else 0
+        btn.label = _extras_button_label(selected_count, available_count).replace("  ", " ")
+        btn.disabled = (
+            self.phase != "ready"
+            or self._operation_busy
+            or self._disc_info is None
+        )
+
+    def _refresh_extras_notice(self) -> None:
+        try:
+            notice = self.query_one("#extras-notice", Static)
+        except Exception:
+            return
+
+        available_count = len(self._extra_scan_bundle.entries) if self._extra_scan_bundle is not None else 0
+        text = _extras_notice_text(
+            len(self._selected_extra_paths),
+            available_count,
+            has_data_session=bool(self._disc_info and self._disc_info.data_track_numbers),
+        )
+        if text and self.phase == "ready":
+            notice.update(text)
+            self._show("extras-notice")
+            return
+
+        notice.update("")
+        self._hide("extras-notice")
+
+    def _maybe_notify_extras(self) -> None:
+        if (
+            self.phase != "ready"
+            or self._disc_signature is None
+            or self._extras_announced_signature == self._disc_signature
+        ):
+            return
+
+        available_count = len(self._extra_scan_bundle.entries) if self._extra_scan_bundle is not None else 0
+        message = _extras_announcement_text(
+            available_count,
+            has_data_session=bool(self._disc_info and self._disc_info.data_track_numbers),
+        )
+        if not message:
+            return
+
+        self._announce(message)
+        self._extras_announced_signature = self._disc_signature
+
     def _set_metadata_search_controls_disabled(self, disabled: bool) -> None:
         for button_id in ("btn-more", "btn-sources"):
             try:
@@ -700,6 +974,36 @@ class DiscvaultApp(App[None]):
             "wav": self._out_wav,
         }
 
+    def _extras_summary(self) -> str:
+        from ..extras import human_size
+
+        if self._extra_scan_bundle is None:
+            return "No extra files have been scanned yet."
+        total_size = sum(entry.size for entry in self._extra_scan_bundle.entries)
+        if self._extra_scan_bundle.mount_root is not None:
+            track_label = "Mounted data session"
+        elif (
+            self._disc_info is not None
+            and self._extra_scan_bundle.track_number in self._disc_info.data_track_numbers
+        ):
+            track_label = "Data track"
+        else:
+            track_label = "Track"
+        return (
+            f"{track_label}"
+            f"{f' {self._extra_scan_bundle.track_number}' if self._extra_scan_bundle.track_number is not None else ''} • "
+            f"{len(self._extra_scan_bundle.entries)} file(s) • "
+            f"{human_size(total_size)}"
+        )
+
+    def _clear_extras_state(self) -> None:
+        if self._extra_scan_bundle is not None:
+            self._extra_scan_bundle.close()
+        self._extra_scan_bundle = None
+        self._selected_extra_paths = []
+        self._refresh_extras_button()
+        self._refresh_extras_notice()
+
     def _output_options(self) -> list[tuple[str, str, bool]]:
         outputs = self._outputs_dict()
         return [
@@ -741,16 +1045,20 @@ class DiscvaultApp(App[None]):
         self._disc_signature = self._disc_sig(disc_info)
         self._watch_disc_present = True
         self._sync_track_selection()
+        from .. import extras as extras_mod
+        extra_scan_bundle, extra_probe_detail = extras_mod.probe_disc_extras(device)
+        if extra_scan_bundle is not None:
+            self.call_from_thread(self._finish_extras_probe, self._disc_signature, extra_scan_bundle, extra_probe_detail)
         self._tlog(
-            f"[green]✓[/green] [bold]{disc_info.track_count} tracks[/bold]  "
+            f"[green]✓[/green] [bold]{display_track_count(disc_info, extra_track_number=extra_scan_bundle.track_number if extra_scan_bundle is not None else None, has_data_session=extra_scan_bundle is not None)} tracks[/bold]  "
             f"FreeDB: {disc_info.freedb_disc_id or '(none)'}  "
             f"MB: {disc_info.mb_disc_id or '(none)'}"
         )
         if disc_info.data_track_numbers:
             self._tlog(
-                "[yellow]![/yellow] Data track(s) detected and excluded by default: "
-                f"{compact_track_list(disc_info.data_track_numbers)}"
+                "[yellow]![/yellow] This disc may include extra files."
             )
+            self._tlog("> Use [bold]Extras[/bold] to inspect and choose files to copy.")
 
         try:
             self._run_meta_fetch(sources or self._sources_dict())
@@ -1040,6 +1348,7 @@ class DiscvaultApp(App[None]):
         for section in (
             "candidates-section",
             "tracklist-scroll",
+            "extras-notice",
             "tags-row",
             "target-row",
         ):
@@ -1050,7 +1359,20 @@ class DiscvaultApp(App[None]):
         self._set_metadata_search_controls_disabled(False)
         self._refresh_eject_button()
         self._refresh_output_button()
+        self._refresh_extras_button()
+        self._refresh_extras_notice()
         self._refresh_import_buttons()
+        hinted_extra_tracks = self._possible_extra_tracks()
+        if (
+            self._disc_info is not None
+            and hinted_extra_tracks
+            and not self._disc_info.data_track_numbers
+        ):
+            self._log(
+                "[yellow]![/yellow] Metadata suggests this disc may include extra files."
+            )
+            self._log("> Use [bold]Extras[/bold] to inspect and choose files to copy.")
+        self._maybe_notify_extras()
         self._update_target_input()
         self._update_cover_art_checkbox()
         if self._auto_import_file_pending:
@@ -1201,6 +1523,8 @@ class DiscvaultApp(App[None]):
             self._do_open_target()
         elif bid == "btn-outputs":
             self._open_output_selector()
+        elif bid == "btn-extras":
+            self._open_extras_selector()
         elif bid == "btn-eject":
             self._do_eject()
         elif bid == "btn-start":
@@ -1271,6 +1595,93 @@ class DiscvaultApp(App[None]):
             return
         self.push_screen(OutputSelectScreen(self._output_options()), self._apply_outputs)
 
+    def _open_extras_selector(self) -> None:
+        if self.phase != "ready" or self._operation_busy:
+            return
+        if self._disc_info is None:
+            self._log("[yellow]![/yellow] No disc is available for extra files.")
+            return
+        if self._extra_scan_bundle is not None:
+            self._show_extras_selector()
+            return
+
+        self._operation_busy = True
+        self.query_one("#btn-start", Button).disabled = True
+        self._set_metadata_search_controls_disabled(True)
+        self._refresh_eject_button()
+        self._refresh_output_button()
+        self._refresh_import_buttons()
+        self._refresh_extras_button()
+        self._log("> Scanning extra files from the disc...")
+        self._start_extras_scan(self._current_meta())
+
+    @work(thread=True, name="extras-probe")
+    def _start_extras_probe(self, device: str, signature: tuple | None) -> None:
+        from .. import extras as extras_mod
+
+        try:
+            bundle, detail = extras_mod.probe_disc_extras(device)
+        except Exception:
+            bundle, detail = None, ""
+        self.call_from_thread(self._finish_extras_probe, signature, bundle, detail)
+
+    def _finish_extras_probe(
+        self,
+        signature: tuple | None,
+        bundle: "ExtraScanBundle | None",
+        detail: str,
+    ) -> None:
+        if signature != self._disc_signature:
+            if bundle is not None:
+                bundle.close()
+            return
+
+        if bundle is None:
+            self._refresh_extras_button()
+            self._refresh_extras_notice()
+            return
+
+        if self._extra_scan_bundle is not None:
+            bundle.close()
+            self._refresh_extras_button()
+            self._refresh_extras_notice()
+            return
+
+        self._extra_scan_bundle = bundle
+        self._selected_extra_paths = []
+        self._sync_track_selection()
+        if self.phase == "ready":
+            self._render_track_editor(self._current_meta())
+        self._log(f"[green]✓[/green] {detail}")
+        self._log("> Use [bold]Extras[/bold] to inspect and choose files to copy.")
+        self._refresh_extras_button()
+        self._refresh_extras_notice()
+        self._maybe_notify_extras()
+
+    def _show_extras_selector(self) -> None:
+        if self._extra_scan_bundle is None:
+            return
+        self.push_screen(
+            ExtrasSelectScreen(
+                list(self._extra_scan_bundle.entries),
+                self._selected_extra_paths,
+                self._extras_summary(),
+            ),
+            self._apply_extras_selection,
+        )
+
+    def _apply_extras_selection(self, selected_paths: list[str] | None) -> None:
+        if selected_paths is None:
+            return
+        self._selected_extra_paths = list(selected_paths)
+        count = len(self._selected_extra_paths)
+        if count:
+            self._log(f"[green]✓[/green] Selected {count} extra file(s) for copy.")
+        else:
+            self._log("> Cleared extra-file selection.")
+        self._refresh_extras_button()
+        self._refresh_extras_notice()
+
     def _apply_settings(self, updated_cfg: "Config" | None) -> None:
         if updated_cfg is None:
             return
@@ -1312,6 +1723,63 @@ class DiscvaultApp(App[None]):
         self._out_aac = outputs.get("aac", False)
         self._out_wav = outputs.get("wav", False)
 
+    @work(thread=True, name="extras-scan")
+    def _start_extras_scan(self, meta: Metadata | None = None) -> None:
+        from .. import extras as extras_mod
+
+        disc_info = self._disc_info
+        if disc_info is None:
+            self.call_from_thread(self._finish_extras_scan, None, "No disc info is available for extras.")
+            return
+
+        try:
+            bundle, detail = extras_mod.scan_disc_extras(
+                disc_info.device,
+                disc_info,
+                self._cfg,
+                meta=meta,
+                work_dir=Path(self._cfg.work_dir),
+                debug=bool(getattr(self._args, "debug", False)),
+                process_callback=lambda proc: setattr(self, "_current_proc", proc),
+            )
+        except Exception as exc:
+            self._current_proc = None
+            self.call_from_thread(self._finish_extras_scan, None, f"Extras scan failed: {exc}")
+            return
+        self._current_proc = None
+        self.call_from_thread(self._finish_extras_scan, bundle, detail)
+
+    def _finish_extras_scan(self, bundle: "ExtraScanBundle | None", detail: str) -> None:
+        previous_selection = set(self._selected_extra_paths)
+        self._operation_busy = False
+        self._current_proc = None
+
+        if bundle is None:
+            self.query_one("#btn-start", Button).disabled = False
+            self._set_metadata_search_controls_disabled(False)
+            self._refresh_eject_button()
+            self._refresh_output_button()
+            self._refresh_import_buttons()
+            self._refresh_extras_button()
+            self._refresh_extras_notice()
+            self._log(f"[yellow]![/yellow] {detail}")
+            return
+
+        self._clear_extras_state()
+        self._extra_scan_bundle = bundle
+        self._selected_extra_paths = [
+            entry.path for entry in bundle.entries if entry.path in previous_selection
+        ]
+        self.query_one("#btn-start", Button).disabled = False
+        self._set_metadata_search_controls_disabled(False)
+        self._refresh_eject_button()
+        self._refresh_output_button()
+        self._refresh_import_buttons()
+        self._refresh_extras_button()
+        self._refresh_extras_notice()
+        self._log(f"[green]✓[/green] {detail}")
+        self._show_extras_selector()
+
     def _do_fetch_metadata(self, sources: dict[str, bool] | None = None) -> None:
         sources = sources or self._sources_dict()
         active = [k for k, v in sources.items() if v]
@@ -1334,6 +1802,7 @@ class DiscvaultApp(App[None]):
         self.query_one("#btn-start", Button).disabled = True
         self._refresh_eject_button()
         self._refresh_output_button()
+        self._refresh_extras_button()
         self._refresh_import_buttons()
         self._start_meta_fetch(
             sources,
@@ -1369,6 +1838,7 @@ class DiscvaultApp(App[None]):
         if not value:
             self._log("[yellow]![/yellow] No import path is set.")
             self._refresh_output_button()
+            self._refresh_extras_button()
             self._refresh_import_buttons()
             return
         self._start_import_from_value(kind, value)
@@ -1381,6 +1851,8 @@ class DiscvaultApp(App[None]):
         self._set_metadata_search_controls_disabled(True)
         self.query_one("#btn-start", Button).disabled = True
         self._refresh_eject_button()
+        self._refresh_output_button()
+        self._refresh_extras_button()
         self._refresh_import_buttons()
         self._start_metadata_import(kind, value)
 
@@ -1424,6 +1896,7 @@ class DiscvaultApp(App[None]):
         self._set_metadata_search_controls_disabled(True)
         self._refresh_eject_button()
         self._refresh_output_button()
+        self._refresh_extras_button()
         self._refresh_import_buttons()
         self._log(f"> Ejecting disc from [bold]{device}[/bold]...")
         self._start_eject(device)
@@ -1473,6 +1946,7 @@ class DiscvaultApp(App[None]):
         do_alac = outputs["alac"]
         do_aac = outputs["aac"]
         do_wav = outputs["wav"]
+        selected_extra_paths = list(self._selected_extra_paths)
 
         if not artist:
             self._log("[yellow]![/yellow] Artist is required.")
@@ -1483,8 +1957,8 @@ class DiscvaultApp(App[None]):
         if do_iso and not do_image:
             self._log("[yellow]![/yellow] ISO export requires Disc image.")
             return
-        if not any((do_image, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav)):
-            self._log("[yellow]![/yellow] Enable at least one output.")
+        if not any((do_image, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav)) and not selected_extra_paths:
+            self._log("[yellow]![/yellow] Enable at least one output or select extra files.")
             return
         selected_tracks = self._selected_audio_tracks()
         if (do_flac or do_mp3 or do_ogg or do_opus or do_alac or do_aac or do_wav) and not selected_tracks:
@@ -1494,7 +1968,9 @@ class DiscvaultApp(App[None]):
         from .. import library
 
         album_root = self._target_album_root() or library.album_root(self._cfg.base_dir, artist, album, year)
-        if _needs_overwrite_confirmation(album_root, outputs):
+        overwrite_outputs = dict(outputs)
+        overwrite_outputs["extras"] = bool(selected_extra_paths)
+        if _needs_overwrite_confirmation(album_root, overwrite_outputs):
             message = (
                 "The target album directory already exists and may contain files.\n\n"
                 f"{album_root}\n\n"
@@ -1521,6 +1997,7 @@ class DiscvaultApp(App[None]):
                     do_aac,
                     do_wav,
                     selected_tracks,
+                    selected_extra_paths,
                 ),
             )
             return
@@ -1539,6 +2016,7 @@ class DiscvaultApp(App[None]):
             do_aac,
             do_wav,
             selected_tracks,
+            selected_extra_paths,
         )
 
     def _apply_start_confirmation(
@@ -1557,6 +2035,7 @@ class DiscvaultApp(App[None]):
         do_aac: bool,
         do_wav: bool,
         selected_tracks: list[int],
+        selected_extra_paths: list[str],
     ) -> None:
         if not confirmed:
             self._log("[yellow]![/yellow] Start cancelled.")
@@ -1576,6 +2055,7 @@ class DiscvaultApp(App[None]):
             do_aac,
             do_wav,
             selected_tracks,
+            selected_extra_paths,
         )
 
     def _begin_start(
@@ -1593,6 +2073,7 @@ class DiscvaultApp(App[None]):
         do_aac: bool,
         do_wav: bool,
         selected_tracks: list[int],
+        selected_extra_paths: list[str],
     ) -> None:
         self._last_rip_params = dict(
             artist=artist, album=album, year=year,
@@ -1600,6 +2081,7 @@ class DiscvaultApp(App[None]):
             do_mp3=do_mp3, do_ogg=do_ogg, do_opus=do_opus,
             do_alac=do_alac, do_aac=do_aac, do_wav=do_wav,
             selected_tracks=selected_tracks,
+            selected_extra_paths=selected_extra_paths,
         )
         self.phase = "running"
         self._operation_busy = True
@@ -1608,11 +2090,13 @@ class DiscvaultApp(App[None]):
         self._set_metadata_search_controls_disabled(True)
         self._refresh_eject_button()
         self._refresh_output_button()
+        self._refresh_extras_button()
         self._refresh_import_buttons()
 
         for section in (
             "candidates-section",
             "tracklist-scroll",
+            "extras-notice",
             "tags-row",
             "target-row",
         ):
@@ -1637,6 +2121,7 @@ class DiscvaultApp(App[None]):
             do_aac,
             do_wav,
             selected_tracks,
+            selected_extra_paths,
         )
 
     @work(thread=True, name="rip")
@@ -1646,6 +2131,7 @@ class DiscvaultApp(App[None]):
         do_image: bool, do_iso: bool, do_flac: bool, do_mp3: bool, do_ogg: bool,
         do_opus: bool, do_alac: bool, do_aac: bool, do_wav: bool,
         selected_tracks: list[int],
+        selected_extra_paths: list[str],
     ) -> None:
         from ..metadata.types import Metadata as MetaType
         from ..pipeline import (
@@ -1733,6 +2219,9 @@ class DiscvaultApp(App[None]):
                     encode_opts=enc,
                     cleanup=self._cleanup,
                     cover_art_enabled=cover_art_enabled,
+                    selected_extra_paths=selected_extra_paths,
+                    extras_iso_path=self._extra_scan_bundle.iso_path if self._extra_scan_bundle is not None else None,
+                    extras_mount_root=self._extra_scan_bundle.mount_root if self._extra_scan_bundle is not None else None,
                     album_root_override=self._target_album_root() if self._target_dir_value() else None,
                 ),
                 callbacks,
@@ -1751,6 +2240,7 @@ class DiscvaultApp(App[None]):
             meta.source, do_image, do_iso, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav,
             enc.flac_compression, enc.mp3_bitrate,
             selected_tracks, result.cover_art_path, cover_art_enabled, result.cue_path, result.iso_path,
+            result.copied_extra_count,
         )
 
     # ------------------------------------------------------------------
@@ -1949,6 +2439,7 @@ class DiscvaultApp(App[None]):
             self._set_metadata_search_controls_disabled(False)
         self._refresh_eject_button()
         self._refresh_output_button()
+        self._refresh_extras_button()
         self._refresh_import_buttons()
 
     # ------------------------------------------------------------------
@@ -2046,6 +2537,7 @@ class DiscvaultApp(App[None]):
         self._metadata_search_query = ""
         self._selected_idx = 0
         self._selected_tracks = {}
+        self._clear_extras_state()
         self._last_accuraterip_status = ""
         self._target_is_base = False
         try:
@@ -2060,6 +2552,7 @@ class DiscvaultApp(App[None]):
         for section in (
             "candidates-section",
             "tracklist-scroll",
+            "extras-notice",
             "tags-row",
             "target-row",
         ):
@@ -2071,6 +2564,7 @@ class DiscvaultApp(App[None]):
         self._set_metadata_search_controls_disabled(True)
         self._refresh_eject_button()
         self._refresh_output_button()
+        self._refresh_extras_button()
         self._refresh_import_buttons()
 
         if previous_phase == "done":
@@ -2078,15 +2572,16 @@ class DiscvaultApp(App[None]):
         else:
             self._log("> Disc detected.")
         self._log(
-            f"[green]✓[/green] [bold]{disc_info.track_count} tracks[/bold]  "
+            f"[green]✓[/green] [bold]{display_track_count(disc_info)} tracks[/bold]  "
             f"FreeDB: {disc_info.freedb_disc_id or '(none)'}  "
             f"MB: {disc_info.mb_disc_id or '(none)'}"
         )
         if disc_info.data_track_numbers:
             self._log(
-                "[yellow]![/yellow] Data track(s) detected and excluded by default: "
-                f"{compact_track_list(disc_info.data_track_numbers)}"
+                "[yellow]![/yellow] This disc may include extra files."
             )
+            self._log("> Use [bold]Extras[/bold] to inspect and choose files to copy.")
+        self._start_extras_probe(disc_info.device, signature)
         self._start_meta_fetch(self._sources_dict())
 
     # ------------------------------------------------------------------
@@ -2117,6 +2612,7 @@ class DiscvaultApp(App[None]):
         cover_art_enabled: bool,
         cue_path: Path | None,
         iso_path: Path | None,
+        copied_extra_count: int,
     ) -> None:
         self.phase = "done"
         self._operation_busy = False
@@ -2126,6 +2622,7 @@ class DiscvaultApp(App[None]):
         self._set_metadata_search_controls_disabled(True)
         self._refresh_eject_button()
         self._refresh_output_button()
+        self._refresh_extras_button()
         self._refresh_import_buttons()
 
         formats = []
@@ -2150,6 +2647,8 @@ class DiscvaultApp(App[None]):
             formats.append(f"AAC/M4A ({self._cfg.aac_bitrate} kbps)")
         if do_wav:
             formats.append("WAV copy")
+        if copied_extra_count:
+            formats.append(f"Extra files ({copied_extra_count})")
 
         year_str = f" ({year})" if year else ""
         details_lines = [
@@ -2166,6 +2665,8 @@ class DiscvaultApp(App[None]):
             details_lines.append(f"  Cover art: [dim]{cover_art_path.name}[/dim]")
         elif cover_art_enabled:
             details_lines.append("  Cover art: [dim]not downloaded[/dim]")
+        if copied_extra_count:
+            details_lines.append(f"  Extra files: {copied_extra_count}")
 
         self.query_one("#done-title", Label).update("[bold green]✓ Done![/bold green]")
         self.query_one("#done-details", Static).update("\n".join(details_lines))
@@ -2211,6 +2712,7 @@ class DiscvaultApp(App[None]):
         btn.disabled = False
         self._refresh_eject_button()
         self._refresh_output_button()
+        self._refresh_extras_button()
         self._refresh_import_buttons()
 
     def _apply_error_dismissed(self, result: str | None, display_msg: str) -> None:
@@ -2225,7 +2727,7 @@ class DiscvaultApp(App[None]):
                 p["do_image"], p["do_iso"], p["do_flac"],
                 p["do_mp3"], p["do_ogg"], p["do_opus"],
                 p["do_alac"], p["do_aac"], p["do_wav"],
-                p["selected_tracks"],
+                p["selected_tracks"], p["selected_extra_paths"],
             )
         else:
             self._enter_waiting_for_disc(f"[bold red]✗ Rip failed:[/bold red] {display_msg}")
@@ -2239,6 +2741,7 @@ class DiscvaultApp(App[None]):
         self._metadata_search_query = ""
         self._selected_idx = 0
         self._selected_tracks = {}
+        self._clear_extras_state()
         self._clear_album_fields()
 
         self._hide("done-section")
@@ -2258,6 +2761,7 @@ class DiscvaultApp(App[None]):
         self._set_metadata_search_controls_disabled(True)
         self._refresh_target_button()
         self._refresh_output_button()
+        self._refresh_extras_button()
         self._refresh_import_buttons()
 
         btn = self.query_one("#btn-cancel", Button)
@@ -2291,9 +2795,9 @@ class DiscvaultApp(App[None]):
 
         if text:
             if _copy_to_clipboard(text):
-                self.notify("Copied to clipboard")
+                self._announce("Copied to clipboard", severity="success")
             else:
-                self.notify("Clipboard unavailable", severity="warning")
+                self._announce("Clipboard unavailable", severity="warning")
 
     def action_cancel_or_quit(self) -> None:
         if self.phase == "running":
@@ -2326,6 +2830,7 @@ class DiscvaultApp(App[None]):
         self._shutting_down = True
         if self._disc_watch_timer is not None:
             self._disc_watch_timer.stop()
+        self._clear_extras_state()
         self._kill_current()
         try:
             self._cleanup.remove_all()
@@ -2361,13 +2866,15 @@ class DiscvaultApp(App[None]):
 2. Select a metadata candidate from the table (or edit tags manually).
 3. Edit track titles/artists inline if needed.
 4. Choose output formats via **Select Outputs**.
-5. Optionally edit the target directory path directly in the path field.
-6. Press **Start** to rip.
+5. Use **Extras** when the disc includes extra files to choose what to copy.
+6. Optionally edit the target directory path directly in the path field.
+7. Press **Start** to rip.
 
 ## Tips
 - Use **Import** to choose either a metadata file or a supported URL, then enter it in a single path field.
 - Use **Manual Search** to open a popup for free-form metadata lookup.
 - **Sources…** lets you choose which metadata providers to query.
+- **Extras** appears when DiscVault detects extra files and lets you pick what goes into the `extras/` folder.
 - The disc is polled every 4 s; swap discs anytime from the done screen.
 """
 
