@@ -6,6 +6,8 @@ The project history starts at `v0.1`.
 
 ## [Unreleased]
 
+## [0.3] - 2026-04-02
+
 ### Added
 
 - `--check-deps` CLI checklist with distro-aware install hints for DiscVault helper tools.
