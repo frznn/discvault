@@ -1,6 +1,7 @@
 """Full Textual TUI for discvault."""
 from __future__ import annotations
 
+from dataclasses import replace
 import shutil
 import subprocess
 from pathlib import Path
@@ -25,7 +26,7 @@ from textual.widgets import (
     RichLog,
     Static,
 )
-from textual import on, work
+from textual import events, on, work
 
 if TYPE_CHECKING:
     from ..config import Config
@@ -62,6 +63,98 @@ from .source_select import SourceSelectScreen
 
 class StatusRichLog(RichLog):
     """RichLog with one-line mouse-wheel scrolling."""
+
+    def _scroll_down_for_pointer(
+        self,
+        *,
+        animate: bool = True,
+        speed: float | None = None,
+        duration: float | None = None,
+        easing=None,
+        force: bool = False,
+        on_complete=None,
+        level="basic",
+    ) -> bool:
+        return self._scroll_to(
+            y=self.scroll_target_y + 1,
+            animate=animate,
+            speed=speed,
+            duration=duration,
+            easing=easing,
+            force=force,
+            on_complete=on_complete,
+            level=level,
+        )
+
+    def _scroll_up_for_pointer(
+        self,
+        *,
+        animate: bool = True,
+        speed: float | None = None,
+        duration: float | None = None,
+        easing=None,
+        force: bool = False,
+        on_complete=None,
+        level="basic",
+    ) -> bool:
+        return self._scroll_to(
+            y=self.scroll_target_y - 1,
+            animate=animate,
+            speed=speed,
+            duration=duration,
+            easing=easing,
+            force=force,
+            on_complete=on_complete,
+            level=level,
+        )
+
+
+class MetadataDataTable(DataTable):
+    """DataTable with one-line mouse-wheel scrolling."""
+
+    _pointer_scroll_coalesce_window = 0.03
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._last_pointer_scroll_time = 0.0
+        self._last_pointer_scroll_direction = 0
+        self._last_pointer_scroll_screen: tuple[int, int] | None = None
+
+    def _is_duplicate_pointer_scroll(self, direction: int, event: events.MouseEvent) -> bool:
+        screen_position = (event.screen_x, event.screen_y)
+        duplicate = (
+            direction == self._last_pointer_scroll_direction
+            and screen_position == self._last_pointer_scroll_screen
+            and (event.time - self._last_pointer_scroll_time) <= self._pointer_scroll_coalesce_window
+        )
+        self._last_pointer_scroll_time = event.time
+        self._last_pointer_scroll_direction = direction
+        self._last_pointer_scroll_screen = screen_position
+        return duplicate
+
+    def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        event.prevent_default()
+        if self._is_duplicate_pointer_scroll(1, event):
+            event.stop()
+            return
+        if event.ctrl or event.shift:
+            if self.allow_horizontal_scroll and self._scroll_right_for_pointer(animate=False):
+                event.stop()
+        else:
+            if self.allow_vertical_scroll and self._scroll_down_for_pointer(animate=False):
+                event.stop()
+
+    def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        event.prevent_default()
+        if self._is_duplicate_pointer_scroll(-1, event):
+            event.stop()
+            return
+        if event.ctrl or event.shift:
+            if self.allow_horizontal_scroll and self._scroll_left_for_pointer(animate=False):
+                event.stop()
+        else:
+            if self.allow_vertical_scroll and self._scroll_up_for_pointer(animate=False):
+                event.stop()
 
     def _scroll_down_for_pointer(
         self,
@@ -290,6 +383,7 @@ class DiscvaultApp(App[None]):
 
     def __init__(self, args, cfg: "Config") -> None:
         super().__init__()
+        self.scroll_sensitivity_y = 1.0
         self._args = args
         self._cfg = cfg
         self._disc_info: DiscInfo | None = None
@@ -362,7 +456,7 @@ class DiscvaultApp(App[None]):
                     yield Label("Metadata", id="metadata-title")
                     with Vertical(id="metadata-left"):
                         with Vertical(id="candidates-section"):
-                            yield DataTable(id="meta-table", cursor_type="row", zebra_stripes=True)
+                            yield MetadataDataTable(id="meta-table", cursor_type="row", zebra_stripes=True)
 
                         with Horizontal(id="metadata-actions-row"):
                             yield Button("Sources…", id="btn-sources", disabled=True)
@@ -660,6 +754,26 @@ class DiscvaultApp(App[None]):
             **self._track_hint_kwargs(),
         )
 
+    def _manual_search_disc_info(self, meta: Metadata | None = None) -> "DiscInfo | None":
+        disc_info = self._disc_info
+        if disc_info is None:
+            return None
+
+        audio_tracks = self._effective_audio_tracks(meta)
+        if not audio_tracks or len(audio_tracks) >= disc_info.track_count:
+            return disc_info
+
+        normalized_count = len(audio_tracks)
+        return replace(
+            disc_info,
+            track_count=normalized_count,
+            track_modes={
+                track_number: mode
+                for track_number, mode in disc_info.track_modes.items()
+                if 1 <= track_number <= normalized_count
+            },
+        )
+
     def _sync_track_selection(self) -> None:
         if self._disc_info is None:
             self._selected_tracks = {}
@@ -875,6 +989,15 @@ class DiscvaultApp(App[None]):
             return
         btn.disabled = self.phase == "running" or self._operation_busy
 
+    def _has_detected_extras(self) -> bool:
+        if self._extra_scan_bundle is not None:
+            return bool(self._extra_scan_bundle.entries)
+        if self._disc_info is None:
+            return False
+        if self._disc_info.data_track_numbers:
+            return True
+        return bool(self._possible_extra_tracks())
+
     def _refresh_extras_button(self) -> None:
         try:
             btn = self.query_one("#btn-extras", Button)
@@ -888,6 +1011,7 @@ class DiscvaultApp(App[None]):
             self.phase != "ready"
             or self._operation_busy
             or self._disc_info is None
+            or not self._has_detected_extras()
         )
 
     def _refresh_extras_notice(self) -> None:
@@ -1092,6 +1216,7 @@ class DiscvaultApp(App[None]):
         use_mb = sources.get("musicbrainz", True)
         use_gnudb = sources.get("gnudb", True)
         use_discogs = sources.get("discogs", True)
+        manual_search_disc_info = self._manual_search_disc_info()
         hint_artist = hint_album = hint_year = ""
         if manual_hints:
             hint_artist, hint_album, hint_year = manual_hints
@@ -1138,7 +1263,7 @@ class DiscvaultApp(App[None]):
                         hint_album,
                         year=hint_year,
                         query=manual_query,
-                        disc_info=disc_info,
+                        disc_info=manual_search_disc_info,
                         timeout=timeout,
                         debug=meta_debug,
                     )
@@ -1192,7 +1317,7 @@ class DiscvaultApp(App[None]):
             if candidates or has_manual_terms:
                 try:
                     r = discogs.lookup(
-                        disc_info,
+                        manual_search_disc_info or disc_info,
                         seed_candidates=candidates,
                         artist=hint_artist,
                         album=hint_album,

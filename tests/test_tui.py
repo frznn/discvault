@@ -5,9 +5,11 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 from argparse import Namespace
+
+from textual import events
 
 from discvault.config import Config
 from discvault import __version__
@@ -18,6 +20,7 @@ from discvault.ui.tui import _extras_button_label
 from discvault.ui.tui import _extras_notice_text
 from discvault.ui.tui import _needs_overwrite_confirmation
 from discvault.ui.tui import _output_stage_label
+from discvault.ui.tui import MetadataDataTable
 from discvault.ui.tui import StatusRichLog
 from discvault.ui.tui import _target_button_destination
 from discvault.ui.tui import _target_label_text
@@ -37,6 +40,50 @@ class TuiHelpersTests(unittest.TestCase):
             log._scroll_up_for_pointer()
             scroll_to.assert_called_once()
             self.assertEqual(scroll_to.call_args.kwargs["y"], -1)
+
+    def test_metadata_table_scrolls_one_line_per_pointer_step(self) -> None:
+        table = MetadataDataTable()
+
+        with patch.object(table, "_scroll_to", return_value=True) as scroll_to:
+            table._scroll_down_for_pointer()
+            scroll_to.assert_called_once()
+            self.assertEqual(scroll_to.call_args.kwargs["y"], 1)
+
+        with patch.object(table, "_scroll_to", return_value=True) as scroll_to:
+            table._scroll_up_for_pointer()
+            scroll_to.assert_called_once()
+            self.assertEqual(scroll_to.call_args.kwargs["y"], -1)
+
+    def test_metadata_table_coalesces_duplicate_pointer_scroll_events(self) -> None:
+        table = MetadataDataTable()
+        first = events.MouseScrollDown(
+            None, x=1, y=1, delta_x=0, delta_y=0, button=0, shift=False, meta=False, ctrl=False
+        )
+        second = events.MouseScrollDown(
+            None, x=1, y=1, delta_x=0, delta_y=0, button=0, shift=False, meta=False, ctrl=False
+        )
+        second.time = first.time + 0.01
+        third = events.MouseScrollDown(
+            None, x=1, y=1, delta_x=0, delta_y=0, button=0, shift=False, meta=False, ctrl=False
+        )
+        third.time = second.time + 0.05
+
+        self.assertFalse(table._is_duplicate_pointer_scroll(1, first))
+        self.assertTrue(table._is_duplicate_pointer_scroll(1, second))
+        self.assertFalse(table._is_duplicate_pointer_scroll(1, third))
+
+    def test_metadata_table_pointer_scroll_prevents_default_base_handler(self) -> None:
+        table = MetadataDataTable()
+        event = events.MouseScrollDown(
+            None, x=1, y=1, delta_x=0, delta_y=0, button=0, shift=False, meta=False, ctrl=False
+        )
+
+        with patch.object(type(table), "allow_vertical_scroll", new_callable=PropertyMock, return_value=True):
+            with patch.object(table, "_scroll_down_for_pointer", return_value=True) as scroll_down:
+                table._on_mouse_scroll_down(event)
+
+        scroll_down.assert_called_once_with(animate=False)
+        self.assertTrue(event._no_default_action)
 
     def test_title_bar_includes_version(self) -> None:
         self.assertEqual(DiscvaultApp.TITLE, "DiscVault")
@@ -63,6 +110,7 @@ class TuiHelpersTests(unittest.TestCase):
             year=None,
         )
         app = DiscvaultApp(args, cfg)
+        self.assertEqual(app.scroll_sensitivity_y, 1.0)
         self.assertEqual(str(app.format_title(app.TITLE, app.SUB_TITLE)), f"DiscVault v{__version__}")
 
     def test_compose_includes_metadata_title(self) -> None:
@@ -276,6 +324,109 @@ class TuiHelpersTests(unittest.TestCase):
             app._maybe_notify_extras()
             announce.assert_called_once()
             self.assertEqual(app._extras_announced_signature, ("disc",))
+
+    def test_refresh_extras_button_stays_disabled_without_detected_extras(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        app.phase = "ready"
+        app._disc_info = DiscInfo(device="/dev/cdrom", track_count=12)
+        button = SimpleNamespace(label="", disabled=False)
+
+        with patch.object(app, "query_one", return_value=button):
+            app._refresh_extras_button()
+
+        self.assertEqual(button.label, "Extras")
+        self.assertTrue(button.disabled)
+
+    def test_refresh_extras_button_enables_for_detected_data_track(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        app.phase = "ready"
+        app._disc_info = DiscInfo(device="/dev/cdrom", track_count=14, track_modes={14: "data"})
+        button = SimpleNamespace(label="", disabled=True)
+
+        with patch.object(app, "query_one", return_value=button):
+            app._refresh_extras_button()
+
+        self.assertFalse(button.disabled)
+
+    def test_refresh_extras_button_enables_for_metadata_extra_hint(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        app.phase = "ready"
+        app._disc_info = DiscInfo(device="/dev/cdrom", track_count=13)
+        app._manual_meta = Metadata(
+            source="MusicBrainz",
+            album_artist="Artist",
+            album="Album",
+            tracks=[Track(number=number, title=f"Track {number}") for number in range(1, 13)],
+        )
+        button = SimpleNamespace(label="", disabled=True)
+
+        with patch.object(app, "query_one", return_value=button):
+            app._refresh_extras_button()
+
+        self.assertFalse(button.disabled)
 
     def test_target_button_destination_uses_library_when_target_missing(self) -> None:
         with TemporaryDirectory() as tmpdir:
