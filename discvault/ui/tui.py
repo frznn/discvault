@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 import shutil
 import subprocess
+import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
     from ..extras import ExtraScanBundle
     from ..metadata.types import Metadata, DiscInfo
 
-from ..metadata.search import combine_search_text
+from ..metadata.search import combine_search_text, search_tokens
 from .. import __version__
 from ..pipeline import _output_stage_label
 from ..tracks import (
@@ -262,6 +263,37 @@ def _extras_notice_text(selected_count: int, available_count: int, *, has_data_s
             "Open [bold]Extras[/bold] to inspect them."
         )
     return ""
+
+
+def _normalize_manual_search_text(value: str) -> str:
+    stripped = "".join(
+        character
+        for character in unicodedata.normalize("NFKD", value)
+        if not unicodedata.combining(character)
+    )
+    return " ".join(search_tokens(stripped.casefold()))
+
+
+def _manual_search_score(meta: "Metadata", search_text: str) -> tuple[int, int, int, int]:
+    normalized_query = _normalize_manual_search_text(search_text)
+    if not normalized_query:
+        return (0, 0, 0, 0)
+
+    tokens = normalized_query.split()
+    haystack = _normalize_manual_search_text(" ".join(filter(None, [meta.album_artist, meta.album, meta.year])))
+    matched_tokens = sum(1 for token in tokens if token in haystack)
+    all_tokens_match = int(bool(tokens) and matched_tokens == len(tokens))
+    phrase_match = int(normalized_query in haystack)
+    detail_length = len(meta.album_artist) + len(meta.album)
+    return (all_tokens_match, phrase_match, matched_tokens, detail_length)
+
+
+def _sort_manual_search_candidates(candidates: list["Metadata"], search_text: str) -> list["Metadata"]:
+    return sorted(
+        candidates,
+        key=lambda meta: _manual_search_score(meta, search_text),
+        reverse=True,
+    )
 
 
 def _extras_announcement_text(available_count: int, *, has_data_session: bool) -> str:
@@ -1197,6 +1229,7 @@ class DiscvaultApp(App[None]):
         *,
         manual_query: str = "",
         manual_hints: tuple[str, str, str] | None = None,
+        manual_only: bool = False,
     ) -> None:
         """Fetch metadata — runs in a worker thread (called from detect or meta worker).
         If merge=True, new results are added to existing candidates instead of replacing them.
@@ -1222,6 +1255,7 @@ class DiscvaultApp(App[None]):
             hint_artist, hint_album, hint_year = manual_hints
         manual_query = manual_query.strip()
         has_manual_terms = bool(manual_query or hint_artist or hint_album)
+        manual_only = manual_only and has_manual_terms
         self._last_meta_fetch_all_sources = use_mb and use_gnudb and use_discogs
 
         active = [k for k, v in sources.items() if v] or ["all"]
@@ -1234,7 +1268,7 @@ class DiscvaultApp(App[None]):
                 if m not in candidates:
                     candidates.append(m)
 
-        if cfg.use_local_cddb_cache and disc_info.freedb_disc_id:
+        if not manual_only and cfg.use_local_cddb_cache and disc_info.freedb_disc_id:
             self._tlog("[dim]  → Local CDDB cache...[/dim]")
             try:
                 r = local.lookup(disc_info, debug=meta_debug)
@@ -1245,7 +1279,7 @@ class DiscvaultApp(App[None]):
 
         # MusicBrainz
         if use_mb:
-            if disc_info.mb_disc_id or disc_info.mb_toc:
+            if not manual_only and (disc_info.mb_disc_id or disc_info.mb_toc):
                 self._tlog("[dim]  → MusicBrainz...[/dim]")
                 try:
                     r = musicbrainz.lookup(disc_info, timeout=timeout, debug=meta_debug)
@@ -1273,7 +1307,7 @@ class DiscvaultApp(App[None]):
                     self._tlog(f"[dim]  ✗ MusicBrainz search: {exc}[/dim]")
 
         # GnuDB HTTP
-        if use_gnudb:
+        if use_gnudb and not manual_only:
             if disc_info.freedb_disc_id:
                 hello_values = gnudb.build_hello_values(
                     cfg.gnudb.hello_user, cfg.gnudb.hello_program, cfg.gnudb.hello_version
@@ -1318,7 +1352,7 @@ class DiscvaultApp(App[None]):
                 try:
                     r = discogs.lookup(
                         manual_search_disc_info or disc_info,
-                        seed_candidates=candidates,
+                        seed_candidates=[] if manual_only else candidates,
                         artist=hint_artist,
                         album=hint_album,
                         year=hint_year,
@@ -1335,6 +1369,15 @@ class DiscvaultApp(App[None]):
                 self._tlog(
                     "[dim]  · Discogs: no search terms yet (use Manual Search, or fill tags and search again)[/dim]"
                 )
+
+        if manual_only:
+            search_text = combine_search_text(
+                manual_query,
+                artist=hint_artist,
+                album=hint_album,
+                year=hint_year,
+            )
+            candidates = _sort_manual_search_candidates(candidates, search_text)
 
         self._candidates = candidates
         if candidates:
@@ -1365,6 +1408,7 @@ class DiscvaultApp(App[None]):
         *,
         manual_query: str = "",
         manual_hints: tuple[str, str, str] | None = None,
+        manual_only: bool = False,
     ) -> None:
         """Re-fetch metadata (F5 / Manual Search button). Runs in its own worker thread."""
         try:
@@ -1373,6 +1417,7 @@ class DiscvaultApp(App[None]):
                 merge=merge,
                 manual_query=manual_query,
                 manual_hints=manual_hints,
+                manual_only=manual_only,
             )
         except Exception as exc:
             self._tlog(f"[bold red]✗ Metadata error: {exc}[/bold red]")
@@ -1914,6 +1959,7 @@ class DiscvaultApp(App[None]):
         if self._operation_busy:
             return
         manual_query, manual_hints = self._manual_search_request()
+        manual_only = bool(self._metadata_search_query.strip())
         self.phase = "detecting"
         self._operation_busy = True
         self._log(f"> Fetching metadata from: {', '.join(active)}")
@@ -1933,6 +1979,7 @@ class DiscvaultApp(App[None]):
             sources,
             manual_query=manual_query,
             manual_hints=manual_hints,
+            manual_only=manual_only,
         )
 
     def _apply_manual_search_prompt(self, value: str | None) -> None:

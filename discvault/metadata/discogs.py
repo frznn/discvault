@@ -103,7 +103,7 @@ def _search_plans(
             {
                 "type": "release",
                 "q": free_form_query,
-                "per_page": 10,
+                "per_page": 25,
             },
             allow_inexact_track_count=True,
         )

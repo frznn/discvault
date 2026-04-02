@@ -428,6 +428,164 @@ class TuiHelpersTests(unittest.TestCase):
 
         self.assertFalse(button.disabled)
 
+    def test_run_meta_fetch_uses_audio_track_count_for_manual_search_on_extra_disc(self) -> None:
+        cfg = Config()
+        cfg.discogs.token = "token"
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+            debug=False,
+            metadata_debug=False,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._disc_info = DiscInfo(device="/dev/cdrom", track_count=14)
+        app._disc_signature = ("disc",)
+        app._extra_scan_bundle = SimpleNamespace(track_number=14, entries=[object()])
+
+        with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
+            patch("discvault.metadata.musicbrainz.search_releases", return_value=[]) as search_releases, \
+            patch("discvault.metadata.discogs.lookup", return_value=[]) as discogs_lookup, \
+            patch.object(app, "_tlog"), \
+            patch.object(app, "call_from_thread"):
+            app._run_meta_fetch(
+                {
+                    "cdtext": False,
+                    "musicbrainz": True,
+                    "gnudb": False,
+                    "discogs": True,
+                },
+                manual_query="Artist Album",
+            )
+
+        self.assertEqual(search_releases.call_args.kwargs["disc_info"].track_count, 13)
+        self.assertEqual(discogs_lookup.call_args.args[0].track_count, 13)
+
+    def test_run_meta_fetch_manual_query_skips_disc_lookup_and_unseeds_discogs(self) -> None:
+        cfg = Config()
+        cfg.discogs.token = "token"
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+            debug=False,
+            metadata_debug=False,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._disc_info = DiscInfo(device="/dev/cdrom", track_count=13, mb_disc_id="disc-id")
+
+        with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
+            patch("discvault.metadata.musicbrainz.lookup", return_value=[]) as lookup_release, \
+            patch("discvault.metadata.musicbrainz.search_releases", return_value=[]) as search_releases, \
+            patch("discvault.metadata.discogs.lookup", return_value=[]) as discogs_lookup, \
+            patch.object(app, "_tlog"), \
+            patch.object(app, "call_from_thread"):
+            app._run_meta_fetch(
+                {
+                    "cdtext": False,
+                    "musicbrainz": True,
+                    "gnudb": False,
+                    "discogs": True,
+                },
+                manual_query="extraño weys rodrigo",
+                manual_only=True,
+            )
+
+        lookup_release.assert_not_called()
+        search_releases.assert_called_once()
+        self.assertEqual(discogs_lookup.call_args.kwargs["seed_candidates"], [])
+
+    def test_run_meta_fetch_manual_query_ranks_best_match_first(self) -> None:
+        cfg = Config()
+        cfg.discogs.token = "token"
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+            debug=False,
+            metadata_debug=False,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._disc_info = DiscInfo(device="/dev/cdrom", track_count=13)
+
+        wrong = Metadata(
+            source="MusicBrainz",
+            album_artist="Rodrigo",
+            album="Random Album",
+            tracks=[Track(number=1, title="Track 1")],
+            match_quality="search",
+        )
+        right = Metadata(
+            source="Discogs",
+            album_artist="Extraño Weys",
+            album="Rodrigo Laviña y Su Combo",
+            tracks=[Track(number=1, title="Track 1")],
+            match_quality="search",
+        )
+
+        with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
+            patch("discvault.metadata.musicbrainz.search_releases", return_value=[wrong]), \
+            patch("discvault.metadata.discogs.lookup", return_value=[right]), \
+            patch.object(app, "_tlog"), \
+            patch.object(app, "call_from_thread"):
+            app._run_meta_fetch(
+                {
+                    "cdtext": False,
+                    "musicbrainz": True,
+                    "gnudb": False,
+                    "discogs": True,
+                },
+                manual_query="extraño weys rodrigo",
+                manual_only=True,
+            )
+
+        self.assertEqual(app._candidates[0], right)
+
     def test_target_button_destination_uses_library_when_target_missing(self) -> None:
         with TemporaryDirectory() as tmpdir:
             library_root = Path(tmpdir)
