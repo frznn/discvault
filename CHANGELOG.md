@@ -21,13 +21,17 @@ The project history starts at `v0.1`.
 - TUI metadata actions now use a popup-driven flow for manual searching and importing instead of separate inline/file/url controls.
 - Shared backup runs can now carry selected extra files alongside the normal audio/image outputs without requiring disc-image output to be saved in the library.
 - The TUI header now shows the app version, and the metadata/log areas have been tightened to make the main rip screen more informative.
+- `--check-deps` now warns when automatic MusicBrainz matching is limited to TOC fallback because `discid` is not installed.
 
 ### Fixed
 
-- Manual metadata searches now use looser MusicBrainz and Discogs queries so partial titles, punctuation differences, and missing years return candidates more reliably.
+- Manual metadata searches now behave like true free-form searches, using the audio-track count on mixed-mode discs, avoiding bad auto-lookup seeds, and ranking the closest matches first.
 - Extras detection now prefers the mounted disc data session, so the TUI and CLI can find and copy extra files without waiting for metadata or explicit data-track hints.
 - Mixed-mode discs with extra files no longer inflate the visible audio track count or show the trailing data session as a normal audio track.
 - The TUI now surfaces detected extras more clearly with an inline notice, a counted `Extras` button label, and a one-time non-blocking notification.
+- The `Extras` button now stays disabled until DiscVault actually detects extra files for the current disc.
+- The metadata candidate list now scrolls one line per mouse-wheel step instead of jumping multiple rows.
+- Automatic MusicBrainz TOC fallback now skips ambiguous multi-release matches instead of presenting likely-wrong candidates.
 
 ## [0.2] - 2026-03-26
 
