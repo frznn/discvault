@@ -41,6 +41,21 @@ def load_disc_info(device: str, debug: bool = False) -> DiscInfo:
     return info
 
 
+def musicbrainz_lookup_notice(info: DiscInfo) -> str:
+    """Return a note when MusicBrainz is limited to TOC fallback matching."""
+    if info.mb_disc_id or not info.mb_toc:
+        return ""
+    if shutil.which("discid"):
+        return (
+            "MusicBrainz automatic matching is using TOC fallback only for this disc, "
+            "so results may be less accurate."
+        )
+    return (
+        "MusicBrainz automatic matching is using TOC fallback only. "
+        "Install discid for more accurate automatic matches."
+    )
+
+
 # ---------------------------------------------------------------------------
 # discid binary (MusicBrainz discid)
 # ---------------------------------------------------------------------------

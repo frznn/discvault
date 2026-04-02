@@ -109,13 +109,28 @@ def _parse_response(data: dict, disc_info: DiscInfo, debug: bool) -> list[Metada
     if not releases:
         return []
 
+    match_quality = "disc_id" if disc_info.mb_disc_id else "toc"
     results: list[Metadata] = []
+    distinct_release_keys: set[tuple[str, str]] = set()
     for release in releases:
-        meta = _release_to_metadata(release, disc_info, debug)
+        meta = _release_to_metadata(release, disc_info, debug, match_quality=match_quality)
         if meta is not None:
             results.append(meta)
+            distinct_release_keys.add(_release_key(meta))
+
+    if not disc_info.mb_disc_id and len(distinct_release_keys) > 1:
+        if debug:
+            print(
+                "[metadata-debug] MusicBrainz: ambiguous TOC fallback across multiple distinct releases; "
+                "skipping automatic MusicBrainz matches."
+            )
+        return []
 
     return results
+
+
+def _release_key(meta: Metadata) -> tuple[str, str]:
+    return (trim(meta.album_artist).casefold(), trim(meta.album).casefold())
 
 
 def _select_medium(release: dict, disc_info: DiscInfo, debug: bool) -> dict | None:

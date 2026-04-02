@@ -111,6 +111,19 @@ class DependencyReportTests(unittest.TestCase):
         self.assertEqual(deps_mod.dependency_exit_code(report), 0)
         self.assertTrue(any("does not exist" in note.detail for note in report.notes))
 
+    def test_missing_discid_adds_musicbrainz_accuracy_note(self) -> None:
+        cfg = Config()
+        args = _args(no_image=True, no_flac=True, no_mp3=True, wav=True)
+        report = deps_mod.build_dependency_report(
+            args,
+            cfg,
+            which=_which_from({"cd-discid", "cdparanoia"}),
+            os_release_text="ID=ubuntu\n",
+            textual_available=True,
+        )
+
+        self.assertTrue(any("install discid" in note.detail for note in report.notes))
+
     def test_readable_device_path_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             device = Path(tmp) / "cdrom"

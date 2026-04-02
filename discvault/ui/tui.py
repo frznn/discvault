@@ -1210,6 +1210,9 @@ class DiscvaultApp(App[None]):
             f"FreeDB: {disc_info.freedb_disc_id or '(none)'}  "
             f"MB: {disc_info.mb_disc_id or '(none)'}"
         )
+        mb_notice = disc_mod.musicbrainz_lookup_notice(disc_info)
+        if mb_notice:
+            self._tlog(f"[yellow]![/yellow] {mb_notice}")
         if disc_info.data_track_numbers:
             self._tlog(
                 "[yellow]![/yellow] This disc may include extra files."

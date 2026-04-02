@@ -163,6 +163,9 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         f"FreeDB ID: {disc_info.freedb_disc_id or '(none)'}  |  "
         f"MB ID: {disc_info.mb_disc_id or '(none)'}"
     )
+    mb_notice = disc_mod.musicbrainz_lookup_notice(disc_info)
+    if mb_notice:
+        warn(mb_notice)
     if disc_info.data_track_numbers:
         warn("This disc may include extra files.")
         if sys.stdin.isatty():

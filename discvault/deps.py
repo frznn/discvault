@@ -316,7 +316,7 @@ def build_dependency_report(
         _check_dependency(_DEPENDENCY_SPECS[key], False, which, package_manager)
         for key in optional_specs
     )
-    notes = tuple(_environment_notes(profile.device))
+    notes = tuple(_environment_notes(profile.device, which))
     return DependencyReport(
         runtime=runtime,
         required=required,
@@ -436,10 +436,17 @@ def _format_notes_section(items: tuple[EnvironmentNote, ...]) -> list[str]:
     return lines
 
 
-def _environment_notes(device: str | None) -> list[EnvironmentNote]:
+def _environment_notes(device: str | None, which=shutil.which) -> list[EnvironmentNote]:
     notes = [
         EnvironmentNote("Cover art downloads", "network access is required at runtime"),
     ]
+    if which("cd-discid") and not which("discid"):
+        notes.append(
+            EnvironmentNote(
+                "MusicBrainz accuracy",
+                "automatic MusicBrainz matching is using TOC fallback only; install discid for exact disc IDs",
+            )
+        )
     if not device:
         notes.append(EnvironmentNote("Device path", "not checked (use --device to inspect a specific path)"))
         return notes

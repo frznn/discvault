@@ -52,6 +52,32 @@ class MusicBrainzTests(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].tracks[0].title, "Right")
+        self.assertEqual(results[0].match_quality, "toc")
+
+    def test_ambiguous_toc_matches_across_distinct_releases_are_skipped(self) -> None:
+        disc_info = DiscInfo(device="/dev/cdrom", track_count=11, mb_toc="1 11 100 1")
+        data = {
+            "releases": [
+                {
+                    "title": "Album One",
+                    "artist-credit": [{"name": "Artist One"}],
+                    "media": [
+                        {"track-count": 11, "tracks": [{"number": "1", "title": "Track"}]},
+                    ],
+                },
+                {
+                    "title": "Album Two",
+                    "artist-credit": [{"name": "Artist Two"}],
+                    "media": [
+                        {"track-count": 11, "tracks": [{"number": "1", "title": "Track"}]},
+                    ],
+                },
+            ]
+        }
+
+        results = _parse_response(data, disc_info, debug=False)
+
+        self.assertEqual(results, [])
 
     def test_manual_release_search_fetches_release_details(self) -> None:
         disc_info = DiscInfo(device="/dev/cdrom", track_count=1)
