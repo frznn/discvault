@@ -437,6 +437,8 @@ class DiscvaultApp(App[None]):
         self._operation_busy = False  # guard against overlapping fetch/rip actions
         self._target_open_busy = False
         self._target_is_base = False  # True when the target input holds a base dir (album subfolder created inside)
+        self._target_base_dir = ""
+        self._syncing_target_input = False
         self._shutting_down = False
         self._cancel_requested = False
         self._last_rip_params: dict | None = None
@@ -870,10 +872,11 @@ class DiscvaultApp(App[None]):
         self.query_one("#input-album", Input).value = ""
         self.query_one("#input-year", Input).value = ""
         try:
-            self.query_one("#target-dir-input", Input).value = ""
+            self._set_target_input_value("")
         except Exception:
             pass
         self._target_is_base = False
+        self._target_base_dir = ""
         self._update_target_input()
         checkbox = self.query_one("#chk-cover-art", Checkbox)
         checkbox.value = False
@@ -969,15 +972,16 @@ class DiscvaultApp(App[None]):
         from .. import library
 
         raw = self._target_dir_value()
+        base_raw = self._target_base_dir.strip() if self._target_is_base and self._target_base_dir else raw
         artist = self._input_val("input-artist")
         album = self._input_val("input-album")
         year = self._input_val("input-year")
-        if raw:
+        if base_raw:
             if self._target_is_base:
                 if not artist and not album:
-                    return Path(raw).expanduser()
-                return library.album_root(raw, artist or "?", album or "?", year)
-            return Path(raw).expanduser()
+                    return Path(base_raw).expanduser()
+                return library.album_root(base_raw, artist or "?", album or "?", year)
+            return Path(base_raw).expanduser()
         if not artist and not album:
             return None
         return library.album_root(self._cfg.base_dir, artist or "?", album or "?", year)
@@ -1594,12 +1598,22 @@ class DiscvaultApp(App[None]):
         self._update_cover_art_checkbox()
 
     def _update_target_input(self) -> None:
-        """Update the placeholder to show the computed auto path. Does not modify the value."""
+        """Update the destination field and placeholder to reflect the current target mode."""
         artist = self._input_val("input-artist")
         album = self._input_val("input-album")
         year = self._input_val("input-year")
         from .. import library
-        if artist or album:
+        if self._target_is_base and self._target_base_dir:
+            if artist or album:
+                display = str(library.album_root(self._target_base_dir, artist or "?", album or "?", year))
+            else:
+                display = self._target_base_dir
+            placeholder = display
+            try:
+                self._set_target_input_value(display)
+            except Exception:
+                pass
+        elif artist or album:
             auto = library.album_root(self._cfg.base_dir, artist or "?", album or "?", year)
             placeholder = str(auto)
         else:
@@ -1609,6 +1623,13 @@ class DiscvaultApp(App[None]):
         except Exception:
             pass
         self._refresh_target_button()
+
+    def _set_target_input_value(self, value: str) -> None:
+        self._syncing_target_input = True
+        try:
+            self.query_one("#target-dir-input", Input).value = value
+        finally:
+            self._syncing_target_input = False
 
     def _update_cover_art_checkbox(self) -> None:
         from .. import artwork as artwork_mod
@@ -1647,6 +1668,16 @@ class DiscvaultApp(App[None]):
             self._manual_meta.year = year
         self._update_target_input()
         self._update_cover_art_checkbox()
+
+    @on(Input.Changed, "#target-dir-input")
+    def _on_target_dir_changed(self, event: Input.Changed) -> None:
+        if self._syncing_target_input:
+            return
+        if not event.input.has_focus:
+            return
+        self._target_is_base = False
+        self._target_base_dir = ""
+        self._refresh_target_button()
 
     @on(Checkbox.Changed, "#chk-cover-art")
     def _on_cover_art_changed(self, event: Checkbox.Changed) -> None:
@@ -1732,7 +1763,7 @@ class DiscvaultApp(App[None]):
         self._open_settings()
 
     def _do_browse_dest(self) -> None:
-        raw = self._target_dir_value()
+        raw = self._target_base_dir if self._target_is_base and self._target_base_dir else self._target_dir_value()
         if raw:
             start = Path(raw).expanduser()
         else:
@@ -1743,20 +1774,10 @@ class DiscvaultApp(App[None]):
         if result is None:
             return
         path, is_base = result
-        if is_base:
-            from .. import library
-            artist = self._input_val("input-artist")
-            album = self._input_val("input-album")
-            year = self._input_val("input-year")
-            if artist or album:
-                # Metadata already known — resolve the full album path now
-                full = library.album_root(str(path), artist or "?", album or "?", year)
-                self._target_is_base = False
-                self.query_one("#target-dir-input", Input).value = str(full)
-                return
-        # No metadata yet (or exact mode) — store as-is; _target_album_root resolves lazily
         self._target_is_base = is_base
-        self.query_one("#target-dir-input", Input).value = str(path)
+        self._target_base_dir = str(path) if is_base else ""
+        self._set_target_input_value(str(path))
+        self._update_target_input()
 
     def _open_settings(self) -> None:
         if self.phase == "running" or self._operation_busy:
@@ -2735,8 +2756,9 @@ class DiscvaultApp(App[None]):
         self._clear_extras_state()
         self._last_accuraterip_status = ""
         self._target_is_base = False
+        self._target_base_dir = ""
         try:
-            self.query_one("#target-dir-input", Input).value = ""
+            self._set_target_input_value("")
         except Exception:
             pass
         self._sync_track_selection()

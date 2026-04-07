@@ -13,6 +13,7 @@ from textual import events
 
 from discvault.config import Config
 from discvault import __version__
+from discvault import library
 from discvault.metadata.types import DiscInfo, Metadata, Track
 from discvault.ui.tui import _folder_open_command
 from discvault.ui.tui import _extras_announcement_text
@@ -736,6 +737,108 @@ class TuiHelpersTests(unittest.TestCase):
 
     def test_target_label_text_formats_target_dir(self) -> None:
         self.assertIn("Target Dir:", _target_label_text("/music", "Artist", "Album", "2000"))
+
+    def test_browse_base_directory_keeps_tracking_metadata_year(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        fields = {
+            "input-artist": "Led Zeppelin",
+            "input-album": "[Led Zeppelin IV]",
+            "input-year": "1994",
+        }
+        target_input = SimpleNamespace(value="", placeholder="")
+
+        def fake_query_one(selector: str, *_args, **_kwargs):
+            if selector == "#target-dir-input":
+                return target_input
+            raise AssertionError(f"Unexpected selector: {selector}")
+
+        def fake_input_val(widget_id: str) -> str:
+            if widget_id == "target-dir-input":
+                return target_input.value.strip()
+            return fields.get(widget_id, "")
+
+        with patch.object(app, "query_one", side_effect=fake_query_one), \
+            patch.object(app, "_input_val", side_effect=fake_input_val), \
+            patch.object(app, "_refresh_target_button"):
+            app._apply_browse_dest((Path("/music"), True))
+
+            self.assertTrue(app._target_is_base)
+            self.assertEqual(app._target_base_dir, "/music")
+            self.assertEqual(
+                target_input.value,
+                str(library.album_root("/music", "Led Zeppelin", "[Led Zeppelin IV]", "1994")),
+            )
+            self.assertEqual(
+                app._target_album_root(),
+                library.album_root("/music", "Led Zeppelin", "[Led Zeppelin IV]", "1994"),
+            )
+
+            fields["input-year"] = "2003"
+            app._update_target_input()
+            self.assertEqual(
+                target_input.value,
+                str(library.album_root("/music", "Led Zeppelin", "[Led Zeppelin IV]", "2003")),
+            )
+            self.assertEqual(
+                app._target_album_root(),
+                library.album_root("/music", "Led Zeppelin", "[Led Zeppelin IV]", "2003"),
+            )
+
+    def test_target_dir_changed_only_breaks_base_tracking_for_real_user_edits(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._target_is_base = True
+        app._target_base_dir = "/music"
+
+        with patch.object(app, "_refresh_target_button"):
+            app._on_target_dir_changed(SimpleNamespace(input=SimpleNamespace(has_focus=False)))
+            self.assertTrue(app._target_is_base)
+            self.assertEqual(app._target_base_dir, "/music")
+
+            app._on_target_dir_changed(SimpleNamespace(input=SimpleNamespace(has_focus=True)))
+            self.assertFalse(app._target_is_base)
+            self.assertEqual(app._target_base_dir, "")
 
     def test_ensure_meta_tracks_omits_trailing_extra_track_from_editor(self) -> None:
         cfg = Config()
