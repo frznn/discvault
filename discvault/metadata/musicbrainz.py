@@ -110,15 +110,17 @@ def _parse_response(data: dict, disc_info: DiscInfo, debug: bool) -> list[Metada
         return []
 
     match_quality = "disc_id" if disc_info.mb_disc_id else "toc"
-    results: list[Metadata] = []
-    distinct_release_keys: set[tuple[str, str]] = set()
+    ranked_results: list[tuple[tuple[int, ...], Metadata]] = []
+    distinct_release_groups: set[tuple[str, str]] = set()
     for release in releases:
-        meta = _release_to_metadata(release, disc_info, debug, match_quality=match_quality)
-        if meta is not None:
-            results.append(meta)
-            distinct_release_keys.add(_release_key(meta))
+        candidate = _release_to_candidate(release, disc_info, debug, match_quality=match_quality)
+        if candidate is None:
+            continue
+        meta, medium = candidate
+        ranked_results.append((_automatic_lookup_score(release, medium, meta), meta))
+        distinct_release_groups.add(_release_group_key(meta))
 
-    if not disc_info.mb_disc_id and len(distinct_release_keys) > 1:
+    if not disc_info.mb_disc_id and len(distinct_release_groups) > 1:
         if debug:
             print(
                 "[metadata-debug] MusicBrainz: ambiguous TOC fallback across multiple distinct releases; "
@@ -126,11 +128,63 @@ def _parse_response(data: dict, disc_info: DiscInfo, debug: bool) -> list[Metada
             )
         return []
 
-    return results
+    if not disc_info.mb_disc_id:
+        ranked_results.sort(key=lambda item: item[0], reverse=True)
+
+    return [meta for _, meta in ranked_results]
 
 
-def _release_key(meta: Metadata) -> tuple[str, str]:
-    return (trim(meta.album_artist).casefold(), trim(meta.album).casefold())
+def _release_group_key(meta: Metadata) -> tuple[str, str]:
+    group_id = trim(meta.mb_release_group_id)
+    if group_id:
+        return ("release-group", group_id)
+    return ("release", trim(meta.album_artist).casefold() + "\0" + _normalized_release_title(meta.album))
+
+
+def _normalized_release_title(value: str) -> str:
+    title = trim(value).casefold()
+    if len(title) >= 2 and title[0] == "[" and title[-1] == "]":
+        title = trim(title[1:-1])
+    return title
+
+
+def _automatic_lookup_score(release: dict, medium: dict, meta: Metadata) -> tuple[int, ...]:
+    release_group = release.get("release-group")
+    release_group_title = ""
+    if isinstance(release_group, dict):
+        release_group_title = trim(str(release_group.get("title", "")))
+
+    disc_id_count = sum(
+        1
+        for disc in medium.get("discs", [])
+        if trim(str(disc.get("id", "")))
+    )
+    release_date = trim(str(release.get("date", "")))
+
+    return (
+        int(meta.match_quality == "disc_id"),
+        int(disc_id_count > 0),
+        int(
+            bool(release_group_title)
+            and _normalized_release_title(meta.album) == _normalized_release_title(release_group_title)
+        ),
+        _date_precision(release_date),
+        int(bool(meta.year)),
+        int(bool(meta.tracks)),
+    )
+
+
+def _date_precision(value: str) -> int:
+    value = trim(value)
+    if not value:
+        return 0
+    if len(value) >= 10 and value[4:5] == "-" and value[7:8] == "-":
+        return 3
+    if len(value) >= 7 and value[4:5] == "-":
+        return 2
+    if len(value) == 4 and value.isdigit():
+        return 1
+    return 0
 
 
 def _select_medium(release: dict, disc_info: DiscInfo, debug: bool) -> dict | None:
@@ -189,7 +243,31 @@ def _release_to_metadata(
     medium = _select_medium(release, disc_info, debug)
     if medium is None:
         return None
+    return _metadata_from_release_medium(release, medium, match_quality=match_quality)
 
+
+def _release_to_candidate(
+    release: dict,
+    disc_info: DiscInfo,
+    debug: bool,
+    *,
+    match_quality: str = "",
+) -> tuple[Metadata, dict] | None:
+    medium = _select_medium(release, disc_info, debug)
+    if medium is None:
+        return None
+    meta = _metadata_from_release_medium(release, medium, match_quality=match_quality)
+    if meta is None:
+        return None
+    return meta, medium
+
+
+def _metadata_from_release_medium(
+    release: dict,
+    medium: dict,
+    *,
+    match_quality: str = "",
+) -> Metadata | None:
     album_artist = trim(_ac_name(release.get("artist-credit")))
     album = trim(release.get("title", ""))
     year = ""

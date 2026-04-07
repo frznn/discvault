@@ -476,6 +476,58 @@ class TuiHelpersTests(unittest.TestCase):
         self.assertEqual(search_releases.call_args.kwargs["disc_info"].track_count, 13)
         self.assertEqual(discogs_lookup.call_args.args[0].track_count, 13)
 
+    def test_run_meta_fetch_queries_cdtext_when_enabled(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+            debug=False,
+            metadata_debug=False,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._disc_info = DiscInfo(device="/dev/cdrom", track_count=13)
+        expected = Metadata(
+            source="CD-Text",
+            album_artist="Artist",
+            album="Album",
+            tracks=[Track(number=1, title="Track 1")],
+            match_quality="cdtext",
+        )
+
+        with patch("discvault.metadata.cdtext.lookup", return_value=[expected]) as cdtext_lookup, \
+            patch.object(app, "_tlog"), \
+            patch.object(app, "call_from_thread"):
+            app._run_meta_fetch(
+                {
+                    "cdtext": True,
+                    "musicbrainz": False,
+                    "gnudb": False,
+                    "discogs": False,
+                }
+            )
+
+        self.assertEqual(app._candidates, [expected])
+        self.assertEqual(cdtext_lookup.call_args.args[0], app._disc_info)
+        self.assertEqual(cdtext_lookup.call_args.kwargs["driver"], cfg.cdrdao_driver)
+        self.assertEqual(cdtext_lookup.call_args.kwargs["timeout"], cfg.metadata_timeout)
+        self.assertFalse(cdtext_lookup.call_args.kwargs["debug"])
+
     def test_run_meta_fetch_manual_query_skips_disc_lookup_and_unseeds_discogs(self) -> None:
         cfg = Config()
         cfg.discogs.token = "token"
@@ -585,6 +637,51 @@ class TuiHelpersTests(unittest.TestCase):
             )
 
         self.assertEqual(app._candidates[0], right)
+
+    def test_run_meta_fetch_reports_gnudb_hint_when_configured_but_disabled(self) -> None:
+        cfg = Config()
+        cfg.gnudb.host = "gnudb.gnudb.org"
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+            debug=False,
+            metadata_debug=False,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._disc_info = DiscInfo(device="/dev/cdrom", track_count=8, mb_toc="1 8 1000 150")
+
+        with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
+            patch("discvault.metadata.musicbrainz.lookup", return_value=[]), \
+            patch("discvault.metadata.discogs.lookup", return_value=[]), \
+            patch.object(app, "_tlog") as tlog, \
+            patch.object(app, "call_from_thread"):
+            app._run_meta_fetch(
+                {
+                    "cdtext": True,
+                    "musicbrainz": True,
+                    "gnudb": False,
+                    "discogs": True,
+                }
+            )
+
+        logged = "\n".join(call.args[0] for call in tlog.call_args_list if call.args)
+        self.assertIn("GnuDB is configured but disabled", logged)
 
     def test_target_button_destination_uses_library_when_target_missing(self) -> None:
         with TemporaryDirectory() as tmpdir:

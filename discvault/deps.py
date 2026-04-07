@@ -440,11 +440,11 @@ def _environment_notes(device: str | None, which=shutil.which) -> list[Environme
     notes = [
         EnvironmentNote("Cover art downloads", "network access is required at runtime"),
     ]
-    if which("cd-discid") and not which("discid"):
+    if which("cd-discid") and not _exact_discid_runtime_available(which):
         notes.append(
             EnvironmentNote(
                 "MusicBrainz accuracy",
-                "automatic MusicBrainz matching is using TOC fallback only; install discid for exact disc IDs",
+                "automatic MusicBrainz matching is using TOC fallback only; install discid or python3-libdiscid for exact disc IDs",
             )
         )
     if not device:
@@ -459,6 +459,19 @@ def _environment_notes(device: str | None, which=shutil.which) -> list[Environme
     else:
         notes.append(EnvironmentNote("Device path", f"{device} exists but is not readable by the current user"))
     return notes
+
+
+def _exact_discid_runtime_available(which=shutil.which) -> bool:
+    if which("discid"):
+        return True
+
+    for module_name in ("discid", "libdiscid.compat.discid"):
+        try:
+            if importlib.util.find_spec(module_name):
+                return True
+        except ModuleNotFoundError:
+            continue
+    return False
 
 
 def _parse_os_release(text: str | None) -> dict[str, str]:

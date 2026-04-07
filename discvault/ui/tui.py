@@ -1237,7 +1237,7 @@ class DiscvaultApp(App[None]):
         """Fetch metadata — runs in a worker thread (called from detect or meta worker).
         If merge=True, new results are added to existing candidates instead of replacing them.
         """
-        from ..metadata import musicbrainz, gnudb, local, discogs
+        from ..metadata import cdtext, musicbrainz, gnudb, local, discogs
 
         disc_info = self._disc_info
         if disc_info is None:
@@ -1249,6 +1249,7 @@ class DiscvaultApp(App[None]):
         meta_debug = getattr(self._args, "metadata_debug", False) or self._args.debug
         timeout = cfg.metadata_timeout
 
+        use_cdtext = sources.get("cdtext", True)
         use_mb = sources.get("musicbrainz", True)
         use_gnudb = sources.get("gnudb", True)
         use_discogs = sources.get("discogs", True)
@@ -1259,7 +1260,7 @@ class DiscvaultApp(App[None]):
         manual_query = manual_query.strip()
         has_manual_terms = bool(manual_query or hint_artist or hint_album)
         manual_only = manual_only and has_manual_terms
-        self._last_meta_fetch_all_sources = use_mb and use_gnudb and use_discogs
+        self._last_meta_fetch_all_sources = use_cdtext and use_mb and use_gnudb and use_discogs
 
         active = [k for k, v in sources.items() if v] or ["all"]
         self._tlog(f"> Fetching metadata ({', '.join(active)})...")
@@ -1270,6 +1271,20 @@ class DiscvaultApp(App[None]):
             for m in metas:
                 if m not in candidates:
                     candidates.append(m)
+
+        if use_cdtext and disc_info.device:
+            self._tlog("[dim]  → CD-Text...[/dim]")
+            try:
+                r = cdtext.lookup(
+                    disc_info,
+                    driver=cfg.cdrdao_driver,
+                    timeout=timeout,
+                    debug=meta_debug,
+                )
+                _add(r)
+                self._tlog(f"[dim]  ✓ CD-Text: {len(r)} result(s)[/dim]")
+            except Exception as exc:
+                self._tlog(f"[dim]  ✗ CD-Text: {exc}[/dim]")
 
         if not manual_only and cfg.use_local_cddb_cache and disc_info.freedb_disc_id:
             self._tlog("[dim]  → Local CDDB cache...[/dim]")
@@ -1388,6 +1403,11 @@ class DiscvaultApp(App[None]):
                 f"[green]✓[/green] Found [bold]{len(candidates)}[/bold] metadata candidate(s)."
             )
         else:
+            if not use_gnudb and cfg.gnudb.host.strip():
+                self._tlog(
+                    "[yellow]![/yellow] No metadata found from the selected sources. "
+                    "GnuDB is configured but disabled in [bold]Sources[/bold]; enable it and search again."
+                )
             if self._last_meta_fetch_all_sources:
                 if has_manual_terms:
                     self._tlog(

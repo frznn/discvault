@@ -1,5 +1,6 @@
 """Disc TOC reading and disc ID extraction."""
 from __future__ import annotations
+import importlib
 import re
 import shutil
 import subprocess
@@ -22,6 +23,8 @@ def load_disc_info(device: str, debug: bool = False) -> DiscInfo:
 
     if shutil.which("discid"):
         _try_discid(device, info, debug=debug)
+    elif _libdiscid_available():
+        _try_libdiscid(device, info, debug=debug)
     if not info.track_offsets and shutil.which("cd-discid"):
         _try_cd_discid_mb(device, info, debug=debug)
     if not info.track_offsets and shutil.which("cd-discid"):
@@ -45,7 +48,7 @@ def musicbrainz_lookup_notice(info: DiscInfo) -> str:
     """Return a note when MusicBrainz is limited to TOC fallback matching."""
     if info.mb_disc_id or not info.mb_toc:
         return ""
-    if shutil.which("discid"):
+    if _exact_discid_support_available():
         return (
             "MusicBrainz automatic matching is using TOC fallback only for this disc, "
             "so results may be less accurate."
@@ -59,6 +62,23 @@ def musicbrainz_lookup_notice(info: DiscInfo) -> str:
 # ---------------------------------------------------------------------------
 # discid binary (MusicBrainz discid)
 # ---------------------------------------------------------------------------
+
+
+def _exact_discid_support_available() -> bool:
+    return bool(shutil.which("discid") or _libdiscid_available())
+
+
+def _load_libdiscid():
+    for module_name in ("discid", "libdiscid.compat.discid"):
+        try:
+            return importlib.import_module(module_name)
+        except ImportError:
+            continue
+    return None
+
+
+def _libdiscid_available() -> bool:
+    return _load_libdiscid() is not None
 
 def _try_discid(device: str, info: DiscInfo, *, debug: bool = False) -> None:
     # `discid` alone outputs the MB disc ID
@@ -88,6 +108,37 @@ def _try_discid(device: str, info: DiscInfo, *, debug: bool = False) -> None:
         _debug(debug, f"discid freedb lookup failed: {exc}")
 
     _build_mb_toc(info)
+
+
+def _try_libdiscid(device: str, info: DiscInfo, *, debug: bool = False) -> None:
+    module = _load_libdiscid()
+    if module is None:
+        return
+
+    try:
+        disc = module.read(device)
+    except Exception as exc:
+        _debug(debug, f"python libdiscid lookup failed: {exc}")
+        return
+
+    info.mb_disc_id = str(getattr(disc, "id", "") or "").strip()
+    info.freedb_disc_id = str(getattr(disc, "freedb_id", "") or "").strip()
+
+    track_offsets = list(getattr(disc, "track_offsets", []) or [])
+    leadout = int(getattr(disc, "sectors", 0) or 0)
+    first_track = int(getattr(disc, "first_track_num", 1) or 1)
+    last_track = int(getattr(disc, "last_track_num", 0) or 0)
+
+    if track_offsets and leadout and last_track >= first_track:
+        info.track_count = last_track - first_track + 1
+        info.track_offsets = [int(offset) for offset in track_offsets[:info.track_count]]
+        info.leadout = leadout
+
+    toc_string = str(getattr(disc, "toc_string", "") or "").strip()
+    if toc_string:
+        info.mb_toc = toc_string
+    else:
+        _build_mb_toc(info)
 
 
 # ---------------------------------------------------------------------------

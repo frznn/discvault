@@ -79,6 +79,78 @@ class MusicBrainzTests(unittest.TestCase):
 
         self.assertEqual(results, [])
 
+    def test_toc_matches_from_same_release_group_are_kept(self) -> None:
+        disc_info = DiscInfo(device="/dev/cdrom", track_count=8, mb_toc="1 8 100 1")
+        data = {
+            "releases": [
+                {
+                    "id": "release-1",
+                    "title": "[Album]",
+                    "artist-credit": [{"name": "Artist"}],
+                    "release-group": {"id": "group-1", "title": "[Album]"},
+                    "media": [
+                        {"track-count": 8, "tracks": [{"number": "1", "title": "Track"}]},
+                    ],
+                },
+                {
+                    "id": "release-2",
+                    "title": "Album",
+                    "artist-credit": [{"name": "Artist"}],
+                    "release-group": {"id": "group-1", "title": "[Album]"},
+                    "media": [
+                        {"track-count": 8, "tracks": [{"number": "1", "title": "Track"}]},
+                    ],
+                },
+            ]
+        }
+
+        results = _parse_response(data, disc_info, debug=False)
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual({result.mb_release_group_id for result in results}, {"group-1"})
+        self.assertEqual({result.album for result in results}, {"[Album]", "Album"})
+
+    def test_toc_matches_prefer_disc_id_backed_and_more_specific_release_dates(self) -> None:
+        disc_info = DiscInfo(device="/dev/cdrom", track_count=8, mb_toc="1 8 100 1")
+        data = {
+            "releases": [
+                {
+                    "id": "release-generic",
+                    "title": "Album",
+                    "date": "2012-06",
+                    "artist-credit": [{"name": "Artist"}],
+                    "release-group": {"id": "group-1", "title": "Album"},
+                    "media": [
+                        {
+                            "track-count": 8,
+                            "tracks": [{"number": "1", "title": "Track"}],
+                            "discs": [],
+                        }
+                    ],
+                },
+                {
+                    "id": "release-specific",
+                    "title": "Album",
+                    "date": "1994-07-01",
+                    "artist-credit": [{"name": "Artist"}],
+                    "release-group": {"id": "group-1", "title": "Album"},
+                    "media": [
+                        {
+                            "track-count": 8,
+                            "tracks": [{"number": "1", "title": "Track"}],
+                            "discs": [{"id": "disc-id-1"}],
+                        }
+                    ],
+                },
+            ]
+        }
+
+        results = _parse_response(data, disc_info, debug=False)
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0].mb_release_id, "release-specific")
+        self.assertEqual(results[1].mb_release_id, "release-generic")
+
     def test_manual_release_search_fetches_release_details(self) -> None:
         disc_info = DiscInfo(device="/dev/cdrom", track_count=1)
         search_payload = {"releases": [{"id": "release-1"}]}

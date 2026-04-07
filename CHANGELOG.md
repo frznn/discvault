@@ -6,6 +6,13 @@ The project history starts at `v0.1`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The TUI metadata fetch path once again queries CD-Text when that source is enabled, matching the shared metadata lookup order.
+- The TUI now warns when GnuDB is configured but disabled in the selected sources, which avoids “no metadata found” dead ends for discs that only resolve through GnuDB.
+- MusicBrainz TOC fallback now keeps same-release-group edition matches and ranks more specific releases ahead of generic stubs, so common albums are less likely to auto-select weak matches.
+- Ubuntu-style `python3-libdiscid` installs now count as exact MusicBrainz disc-ID support, so DiscVault no longer depends on a standalone `discid` binary to suppress the TOC-fallback warning.
+
 ## [0.3] - 2026-04-02
 
 ### Added
