@@ -59,7 +59,6 @@ class Config:
     default_src_cdtext: bool = True
     default_src_musicbrainz: bool = True
     default_src_gnudb: bool = False
-    default_src_discogs: bool = False
     use_local_cddb_cache: bool = True
     accuraterip_enabled: bool = False
     download_cover_art: bool = True
@@ -130,7 +129,6 @@ class Config:
         cfg.default_src_cdtext = _as_bool(dv.get("default_src_cdtext"), cfg.default_src_cdtext)
         cfg.default_src_musicbrainz = _src_default("default_src_musicbrainz", True)
         cfg.default_src_gnudb = _src_default("default_src_gnudb", False)
-        cfg.default_src_discogs = _src_default("default_src_discogs", False)
         cfg.use_local_cddb_cache = _as_bool(
             dv.get("use_local_cddb_cache", cfg.use_local_cddb_cache),
             cfg.use_local_cddb_cache,
@@ -187,7 +185,6 @@ class Config:
             f"default_src_cdtext = {str(self.default_src_cdtext).lower()}",
             f"default_src_musicbrainz = {str(self.default_src_musicbrainz).lower()}",
             f"default_src_gnudb = {str(self.default_src_gnudb).lower()}",
-            f"default_src_discogs = {str(self.default_src_discogs).lower()}",
             f"use_local_cddb_cache = {str(self.use_local_cddb_cache).lower()}",
             f"accuraterip_enabled = {str(self.accuraterip_enabled).lower()}",
             f"download_cover_art = {str(self.download_cover_art).lower()}",
@@ -272,9 +269,9 @@ def first_run_setup(cfg: Config) -> None:
 def _normalize_metadata_source(value: str) -> str:
     if value == "local":
         return "gnudb"
-    if value in {"musicbrainz", "gnudb", "cdtext", "discogs"}:
+    if value in {"musicbrainz", "gnudb", "cdtext"}:
         return value
-    return "musicbrainz"
+    return ""
 
 
 def _normalize_image_ripper(value: str) -> str:

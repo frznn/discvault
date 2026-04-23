@@ -41,6 +41,8 @@ discvault --cli
 | `--metadata-timeout SEC` | Timeout for metadata requests |
 | `--metadata-debug` | Debug metadata lookup |
 
+`--artist`, `--album`, and `--year` act as final tag overrides in CLI mode. They do not trigger Discogs or MusicBrainz text search; use imports when you want to provide metadata explicitly.
+
 ### Audio Outputs
 
 | Option | Description |

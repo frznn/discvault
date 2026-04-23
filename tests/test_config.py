@@ -46,10 +46,30 @@ class ConfigTests(unittest.TestCase):
                 )
                 cfg.save()
                 loaded = config_mod.Config.load()
+                saved_text = config_path.read_text()
             finally:
                 config_mod.CONFIG_PATH = old
 
         self.assertEqual(loaded.base_dir, 'music "special"')
+        self.assertNotIn("default_src_discogs", saved_text)
+
+    def test_legacy_discogs_preferred_source_keeps_auto_lookup_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                "[discvault]\n"
+                'preferred_metadata_source = "discogs"\n'
+            )
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config.load()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertTrue(cfg.default_src_cdtext)
+        self.assertTrue(cfg.default_src_musicbrainz)
+        self.assertFalse(cfg.default_src_gnudb)
 
     def test_completion_sound_is_normalized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

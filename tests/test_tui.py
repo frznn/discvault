@@ -170,14 +170,12 @@ class TuiHelpersTests(unittest.TestCase):
         app._src_mb = False
         app._src_gnudb = True
         app._src_cdtext = False
-        app._src_discogs = True
         self.assertEqual(
             app._sources_dict(),
             {
                 "musicbrainz": False,
                 "gnudb": True,
                 "cdtext": False,
-                "discogs": True,
             },
         )
 
@@ -459,19 +457,17 @@ class TuiHelpersTests(unittest.TestCase):
         app._disc_signature = ("disc",)
         app._extra_scan_bundle = SimpleNamespace(track_number=14, entries=[object()])
 
-        with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
-            patch("discvault.metadata.musicbrainz.search_releases", return_value=[]) as search_releases, \
+        with patch("discvault.metadata.musicbrainz.search_releases", return_value=[]) as search_releases, \
             patch("discvault.metadata.discogs.lookup", return_value=[]) as discogs_lookup, \
             patch.object(app, "_tlog"), \
             patch.object(app, "call_from_thread"):
             app._run_meta_fetch(
                 {
-                    "cdtext": False,
                     "musicbrainz": True,
                     "gnudb": False,
-                    "discogs": True,
                 },
                 manual_query="Artist Album",
+                manual_search=True,
             )
 
         self.assertEqual(search_releases.call_args.kwargs["disc_info"].track_count, 13)
@@ -519,7 +515,6 @@ class TuiHelpersTests(unittest.TestCase):
                     "cdtext": True,
                     "musicbrainz": False,
                     "gnudb": False,
-                    "discogs": False,
                 }
             )
 
@@ -529,7 +524,7 @@ class TuiHelpersTests(unittest.TestCase):
         self.assertEqual(cdtext_lookup.call_args.kwargs["timeout"], cfg.metadata_timeout)
         self.assertFalse(cdtext_lookup.call_args.kwargs["debug"])
 
-    def test_run_meta_fetch_manual_query_skips_disc_lookup_and_unseeds_discogs(self) -> None:
+    def test_run_meta_fetch_auto_mode_ignores_manual_query_terms(self) -> None:
         cfg = Config()
         cfg.discogs.token = "token"
         args = Namespace(
@@ -557,8 +552,7 @@ class TuiHelpersTests(unittest.TestCase):
         app = DiscvaultApp(args, cfg)
         app._disc_info = DiscInfo(device="/dev/cdrom", track_count=13, mb_disc_id="disc-id")
 
-        with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
-            patch("discvault.metadata.musicbrainz.lookup", return_value=[]) as lookup_release, \
+        with patch("discvault.metadata.musicbrainz.lookup", return_value=[]) as lookup_release, \
             patch("discvault.metadata.musicbrainz.search_releases", return_value=[]) as search_releases, \
             patch("discvault.metadata.discogs.lookup", return_value=[]) as discogs_lookup, \
             patch.object(app, "_tlog"), \
@@ -568,15 +562,66 @@ class TuiHelpersTests(unittest.TestCase):
                     "cdtext": False,
                     "musicbrainz": True,
                     "gnudb": False,
-                    "discogs": True,
                 },
                 manual_query="extraño weys rodrigo",
-                manual_only=True,
+            )
+
+        lookup_release.assert_called_once()
+        search_releases.assert_not_called()
+        discogs_lookup.assert_not_called()
+
+    def test_run_meta_fetch_manual_query_skips_disc_lookup_and_seeds_discogs_from_search_results(self) -> None:
+        cfg = Config()
+        cfg.discogs.token = "token"
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+            debug=False,
+            metadata_debug=False,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._disc_info = DiscInfo(device="/dev/cdrom", track_count=13, mb_disc_id="disc-id")
+        seeded = Metadata(
+            source="MusicBrainz",
+            album_artist="Extraño Weys",
+            album="Rodrigo",
+            tracks=[Track(number=1, title="Track 1")],
+            match_quality="search",
+        )
+
+        with patch("discvault.metadata.musicbrainz.lookup", return_value=[]) as lookup_release, \
+            patch("discvault.metadata.musicbrainz.search_releases", return_value=[seeded]) as search_releases, \
+            patch("discvault.metadata.discogs.lookup", return_value=[]) as discogs_lookup, \
+            patch.object(app, "_tlog"), \
+            patch.object(app, "call_from_thread"):
+            app._run_meta_fetch(
+                {
+                    "musicbrainz": True,
+                    "gnudb": False,
+                },
+                manual_query="extraño weys rodrigo",
+                manual_search=True,
             )
 
         lookup_release.assert_not_called()
         search_releases.assert_called_once()
-        self.assertEqual(discogs_lookup.call_args.kwargs["seed_candidates"], [])
+        self.assertEqual(discogs_lookup.call_args.kwargs["seed_candidates"], [seeded])
 
     def test_run_meta_fetch_manual_query_ranks_best_match_first(self) -> None:
         cfg = Config()
@@ -621,20 +666,17 @@ class TuiHelpersTests(unittest.TestCase):
             match_quality="search",
         )
 
-        with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
-            patch("discvault.metadata.musicbrainz.search_releases", return_value=[wrong]), \
+        with patch("discvault.metadata.musicbrainz.search_releases", return_value=[wrong]), \
             patch("discvault.metadata.discogs.lookup", return_value=[right]), \
             patch.object(app, "_tlog"), \
             patch.object(app, "call_from_thread"):
             app._run_meta_fetch(
                 {
-                    "cdtext": False,
                     "musicbrainz": True,
                     "gnudb": False,
-                    "discogs": True,
                 },
                 manual_query="extraño weys rodrigo",
-                manual_only=True,
+                manual_search=True,
             )
 
         self.assertEqual(app._candidates[0], right)
@@ -669,7 +711,6 @@ class TuiHelpersTests(unittest.TestCase):
 
         with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
             patch("discvault.metadata.musicbrainz.lookup", return_value=[]), \
-            patch("discvault.metadata.discogs.lookup", return_value=[]), \
             patch.object(app, "_tlog") as tlog, \
             patch.object(app, "call_from_thread"):
             app._run_meta_fetch(
@@ -677,7 +718,6 @@ class TuiHelpersTests(unittest.TestCase):
                     "cdtext": True,
                     "musicbrainz": True,
                     "gnudb": False,
-                    "discogs": True,
                 }
             )
 

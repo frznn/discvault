@@ -29,7 +29,6 @@ metadata_timeout = 8
 default_src_cdtext = true
 default_src_musicbrainz = true
 default_src_gnudb = false
-default_src_discogs = false
 use_local_cddb_cache = true
 
 # Audio extraction
@@ -81,7 +80,7 @@ token = ""
 | `keep_wav` | Keep intermediate WAV files after encoding |
 | `eject_after` | Eject disc when rip completes |
 
-### Metadata Sources
+### Automatic Metadata Sources
 
 | Setting | Description |
 |---------|-------------|
@@ -89,8 +88,9 @@ token = ""
 | `default_src_cdtext` | Try CD-Text from disc |
 | `default_src_musicbrainz` | Query MusicBrainz |
 | `default_src_gnudb` | Query GnuDB (requires `[gnudb]` config) |
-| `default_src_discogs` | Query Discogs (requires `[discogs]` config) |
 | `use_local_cddb_cache` | Check `~/.cddb` before online lookup |
+
+These defaults apply to automatic disc lookup only. Discogs is not part of the automatic source set; it is used only by Manual Search.
 
 ### Audio Extraction
 
@@ -133,6 +133,6 @@ token = ""
 
 | Setting | Description |
 |---------|-------------|
-| `token` | Discogs API token (optional but recommended) |
+| `token` | Discogs API token for Manual Search (optional but recommended) |
 
-A Discogs token improves reliability and avoids rate limits. Get one at [discogs.com/settings/developers](https://www.discogs.com/settings/developers).
+A Discogs token improves reliability and avoids rate limits for Manual Search. DiscVault can still try anonymous Discogs requests when no token is configured. Get one at [discogs.com/settings/developers](https://www.discogs.com/settings/developers).

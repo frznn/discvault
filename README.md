@@ -8,7 +8,8 @@ DiscVault creates archival-quality disc backups with raw images, multiple audio 
 
 - Creates raw disc images (`.bin`, `.toc`, `.cue`) with optional `.iso` for data tracks
 - Rips audio to FLAC, MP3, OGG, Opus, ALAC, AAC, or WAV
-- Fetches metadata from CD-Text, MusicBrainz, GnuDB, Discogs, and local CDDB
+- Performs automatic disc lookup from CD-Text, MusicBrainz, GnuDB, and local CDDB
+- Runs Manual Search against MusicBrainz text search and Discogs
 - Imports metadata from cue sheets, TOC files, JSON/TOML, or Bandcamp URLs
 - Downloads cover art automatically
 - Supports AccurateRip verification
@@ -48,7 +49,8 @@ discvault --cli --metadata-url https://artist.bandcamp.com/album/title
 
 The TUI lets you:
 
-- Search metadata from multiple sources
+- Fetch automatic metadata from disc-lookup sources
+- Run Manual Search with MusicBrainz text search and Discogs
 - Import from files or URLs
 - Edit album and track info before ripping
 - Select which tracks to include

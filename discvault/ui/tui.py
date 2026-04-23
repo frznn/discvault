@@ -453,7 +453,6 @@ class DiscvaultApp(App[None]):
         self._src_cdtext = cfg.default_src_cdtext
         self._src_mb = cfg.default_src_musicbrainz
         self._src_gnudb = cfg.default_src_gnudb
-        self._src_discogs = cfg.default_src_discogs
         self._out_image = not args.no_image
         self._out_iso = bool(getattr(args, "iso", False))
         self._out_flac = not args.no_flac
@@ -1118,7 +1117,6 @@ class DiscvaultApp(App[None]):
             "cdtext": self._src_cdtext,
             "musicbrainz": self._src_mb,
             "gnudb": self._src_gnudb,
-            "discogs": self._src_discogs,
         }
 
     def _outputs_dict(self) -> dict[str, bool]:
@@ -1236,12 +1234,12 @@ class DiscvaultApp(App[None]):
         *,
         manual_query: str = "",
         manual_hints: tuple[str, str, str] | None = None,
-        manual_only: bool = False,
+        manual_search: bool = False,
     ) -> None:
         """Fetch metadata — runs in a worker thread (called from detect or meta worker).
         If merge=True, new results are added to existing candidates instead of replacing them.
         """
-        from ..metadata import cdtext, musicbrainz, gnudb, local, discogs
+        from ..metadata import lookup as meta_lookup
 
         disc_info = self._disc_info
         if disc_info is None:
@@ -1251,148 +1249,63 @@ class DiscvaultApp(App[None]):
 
         cfg = self._cfg
         meta_debug = getattr(self._args, "metadata_debug", False) or self._args.debug
-        timeout = cfg.metadata_timeout
 
         use_cdtext = sources.get("cdtext", True)
         use_mb = sources.get("musicbrainz", True)
         use_gnudb = sources.get("gnudb", True)
-        use_discogs = sources.get("discogs", True)
         manual_search_disc_info = self._manual_search_disc_info()
         hint_artist = hint_album = hint_year = ""
         if manual_hints:
             hint_artist, hint_album, hint_year = manual_hints
         manual_query = manual_query.strip()
         has_manual_terms = bool(manual_query or hint_artist or hint_album)
-        manual_only = manual_only and has_manual_terms
-        self._last_meta_fetch_all_sources = use_cdtext and use_mb and use_gnudb and use_discogs
+        manual_search = manual_search and has_manual_terms
+        self._last_meta_fetch_all_sources = use_cdtext and use_mb and use_gnudb
 
         active = [k for k, v in sources.items() if v] or ["all"]
-        self._tlog(f"> Fetching metadata ({', '.join(active)})...")
+        if manual_search:
+            search_providers = ["Discogs"]
+            if use_mb:
+                search_providers.insert(0, "MusicBrainz")
+            self._tlog(f"> Searching providers: {', '.join(search_providers)}")
+        else:
+            self._tlog(f"> Fetching metadata ({', '.join(active)})...")
 
-        candidates: list = list(self._candidates) if merge else []
+        callbacks = meta_lookup.LookupCallbacks(
+            on_start=lambda label: self._tlog(f"[dim]  → {label}...[/dim]"),
+            on_success=lambda label, count: self._tlog(
+                f"[dim]  ✓ {label}: {count} result(s)[/dim]"
+            ),
+            on_error=lambda label, message: self._tlog(
+                f"[dim]  ✗ {label}: {message}[/dim]"
+            ),
+            on_skip=lambda label, reason: self._tlog(
+                f"[dim]  · {label}: {reason}[/dim]"
+            ),
+            on_info=lambda message: self._tlog(f"[dim]  · {message}[/dim]"),
+        )
 
-        def _add(metas: list) -> None:
-            for m in metas:
-                if m not in candidates:
-                    candidates.append(m)
+        fetched = meta_lookup.fetch_candidates(
+            disc_info,
+            cfg,
+            debug=meta_debug,
+            sources=sources,
+            manual_hints=manual_hints,
+            manual_query=manual_query,
+            manual_search=manual_search,
+            manual_search_disc_info=manual_search_disc_info,
+            cdtext_driver=cfg.cdrdao_driver,
+            callbacks=callbacks,
+        )
+        if merge:
+            candidates = list(self._candidates)
+            for candidate in fetched:
+                if candidate not in candidates:
+                    candidates.append(candidate)
+        else:
+            candidates = fetched
 
-        if use_cdtext and disc_info.device:
-            self._tlog("[dim]  → CD-Text...[/dim]")
-            try:
-                r = cdtext.lookup(
-                    disc_info,
-                    driver=cfg.cdrdao_driver,
-                    timeout=timeout,
-                    debug=meta_debug,
-                )
-                _add(r)
-                self._tlog(f"[dim]  ✓ CD-Text: {len(r)} result(s)[/dim]")
-            except Exception as exc:
-                self._tlog(f"[dim]  ✗ CD-Text: {exc}[/dim]")
-
-        if not manual_only and cfg.use_local_cddb_cache and disc_info.freedb_disc_id:
-            self._tlog("[dim]  → Local CDDB cache...[/dim]")
-            try:
-                r = local.lookup(disc_info, debug=meta_debug)
-                _add(r)
-                self._tlog(f"[dim]  ✓ Local CDDB cache: {len(r)} result(s)[/dim]")
-            except Exception as exc:
-                self._tlog(f"[dim]  ✗ Local CDDB cache: {exc}[/dim]")
-
-        # MusicBrainz
-        if use_mb:
-            if not manual_only and (disc_info.mb_disc_id or disc_info.mb_toc):
-                self._tlog("[dim]  → MusicBrainz...[/dim]")
-                try:
-                    r = musicbrainz.lookup(disc_info, timeout=timeout, debug=meta_debug)
-                    _add(r)
-                    self._tlog(f"[dim]  ✓ MusicBrainz: {len(r)} result(s)[/dim]")
-                except Exception as exc:
-                    self._tlog(f"[dim]  ✗ MusicBrainz: {exc}[/dim]")
-            elif not has_manual_terms:
-                self._tlog("[dim]  · MusicBrainz: no disc ID[/dim]")
-            if has_manual_terms:
-                self._tlog("[dim]  → MusicBrainz search...[/dim]")
-                try:
-                    r = musicbrainz.search_releases(
-                        hint_artist,
-                        hint_album,
-                        year=hint_year,
-                        query=manual_query,
-                        disc_info=manual_search_disc_info,
-                        timeout=timeout,
-                        debug=meta_debug,
-                    )
-                    _add(r)
-                    self._tlog(f"[dim]  ✓ MusicBrainz search: {len(r)} result(s)[/dim]")
-                except Exception as exc:
-                    self._tlog(f"[dim]  ✗ MusicBrainz search: {exc}[/dim]")
-
-        # GnuDB HTTP
-        if use_gnudb and not manual_only:
-            if disc_info.freedb_disc_id:
-                hello_values = gnudb.build_hello_values(
-                    cfg.gnudb.hello_user, cfg.gnudb.hello_program, cfg.gnudb.hello_version
-                )[:1]
-                self._tlog("[dim]  → GnuDB HTTP...[/dim]")
-                try:
-                    r = gnudb.lookup_http(
-                        disc_info,
-                        hello_values,
-                        timeout=timeout,
-                        cache_enabled=cfg.use_local_cddb_cache,
-                        debug=meta_debug,
-                    )
-                    _add(r)
-                    self._tlog(f"[dim]  ✓ GnuDB HTTP: {len(r)} result(s)[/dim]")
-                except Exception as exc:
-                    self._tlog(f"[dim]  ✗ GnuDB HTTP: {exc}[/dim]")
-                if cfg.gnudb.host:
-                    self._tlog(f"[dim]  → GnuDB CDDBP ({cfg.gnudb.host})...[/dim]")
-                    try:
-                        r = gnudb.lookup_cddbp(
-                            disc_info, hello_values,
-                            host=cfg.gnudb.host, port=cfg.gnudb.port,
-                            timeout=timeout,
-                            cache_enabled=cfg.use_local_cddb_cache,
-                            debug=meta_debug,
-                        )
-                        _add(r)
-                        self._tlog(f"[dim]  ✓ GnuDB CDDBP: {len(r)} result(s)[/dim]")
-                    except Exception as exc:
-                        self._tlog(f"[dim]  ✗ GnuDB CDDBP: {exc}[/dim]")
-            else:
-                self._tlog("[dim]  · GnuDB: no FreeDB disc ID[/dim]")
-
-        if use_discogs:
-            self._tlog("[dim]  → Discogs...[/dim]")
-            if not cfg.discogs.token.strip():
-                self._tlog(
-                    "[dim]  · Discogs: using anonymous access; a token improves reliability and rate limits[/dim]"
-                )
-            if candidates or has_manual_terms:
-                try:
-                    r = discogs.lookup(
-                        manual_search_disc_info or disc_info,
-                        seed_candidates=[] if manual_only else candidates,
-                        artist=hint_artist,
-                        album=hint_album,
-                        year=hint_year,
-                        query=manual_query,
-                        token=cfg.discogs.token,
-                        timeout=timeout,
-                        debug=meta_debug,
-                    )
-                    _add(r)
-                    self._tlog(f"[dim]  ✓ Discogs: {len(r)} result(s)[/dim]")
-                except Exception as exc:
-                    self._tlog(f"[dim]  ✗ Discogs: {exc}[/dim]")
-            else:
-                self._tlog(
-                    "[dim]  · Discogs: no search terms yet (use Manual Search, or fill tags and search again)[/dim]"
-                )
-
-        if manual_only:
+        if manual_search:
             search_text = combine_search_text(
                 manual_query,
                 artist=hint_artist,
@@ -1412,18 +1325,17 @@ class DiscvaultApp(App[None]):
                     "[yellow]![/yellow] No metadata found from the selected sources. "
                     "GnuDB is configured but disabled in [bold]Sources[/bold]; enable it and search again."
                 )
-            if self._last_meta_fetch_all_sources:
-                if has_manual_terms:
-                    self._tlog(
-                        "[yellow]![/yellow] No metadata found — adjust your search terms and try again, or enter tags manually."
-                    )
-                else:
-                    self._tlog(
-                        "[yellow]![/yellow] No metadata found — use Manual Search to query MusicBrainz/Discogs, or enter tags manually."
-                    )
+            if manual_search:
+                self._tlog(
+                    "[yellow]![/yellow] No metadata found — adjust your search terms and try again, or enter tags manually."
+                )
+            elif self._last_meta_fetch_all_sources:
+                self._tlog(
+                    "[yellow]![/yellow] No metadata found — use Manual Search to query MusicBrainz/Discogs, or enter tags manually."
+                )
             else:
                 self._tlog(
-                    "[yellow]![/yellow] No metadata found — try another source selection, or search again with different terms."
+                    "[yellow]![/yellow] No metadata found — try another automatic source selection, or use Manual Search."
                 )
         self.call_from_thread(self._enter_ready)
 
@@ -1435,7 +1347,7 @@ class DiscvaultApp(App[None]):
         *,
         manual_query: str = "",
         manual_hints: tuple[str, str, str] | None = None,
-        manual_only: bool = False,
+        manual_search: bool = False,
     ) -> None:
         """Re-fetch metadata (F5 / Manual Search button). Runs in its own worker thread."""
         try:
@@ -1444,7 +1356,7 @@ class DiscvaultApp(App[None]):
                 merge=merge,
                 manual_query=manual_query,
                 manual_hints=manual_hints,
-                manual_only=manual_only,
+                manual_search=manual_search,
             )
         except Exception as exc:
             self._tlog(f"[bold red]✗ Metadata error: {exc}[/bold red]")
@@ -1909,11 +1821,10 @@ class DiscvaultApp(App[None]):
         self._src_cdtext = self._cfg.default_src_cdtext
         self._src_mb = self._cfg.default_src_musicbrainz
         self._src_gnudb = self._cfg.default_src_gnudb
-        self._src_discogs = self._cfg.default_src_discogs
         self._cover_art_selected = self._cfg.download_cover_art
         self._update_target_input()
         self._update_cover_art_checkbox()
-        self._log("[green]✓[/green] Settings saved. Use [bold]Manual Search[/bold] to re-run metadata lookup with the current sources.")
+        self._log("[green]✓[/green] Settings saved. Use [bold]Manual Search[/bold] for Discogs or text-based metadata searches.")
 
     def _apply_search_sources(self, sources: dict[str, bool] | None) -> None:
         if sources is None:
@@ -1921,7 +1832,6 @@ class DiscvaultApp(App[None]):
         self._src_cdtext = sources.get("cdtext", False)
         self._src_mb = sources.get("musicbrainz", False)
         self._src_gnudb = sources.get("gnudb", False)
-        self._src_discogs = sources.get("discogs", False)
         self._do_fetch_metadata(sources)
 
     def _apply_outputs(self, outputs: dict[str, bool] | None) -> None:
@@ -2002,13 +1912,9 @@ class DiscvaultApp(App[None]):
             return
         if self._operation_busy:
             return
-        manual_query, manual_hints = self._manual_search_request()
-        manual_only = bool(self._metadata_search_query.strip())
         self.phase = "detecting"
         self._operation_busy = True
         self._log(f"> Fetching metadata from: {', '.join(active)}")
-        if manual_query:
-            self._log(f"> Search terms: [bold]{manual_query}[/bold]")
         self._candidates = []
         self._selected_idx = 0
         self.query_one("#meta-table", DataTable).clear(columns=True)
@@ -2021,16 +1927,47 @@ class DiscvaultApp(App[None]):
         self._refresh_import_buttons()
         self._start_meta_fetch(
             sources,
-            manual_query=manual_query,
-            manual_hints=manual_hints,
-            manual_only=manual_only,
         )
 
     def _apply_manual_search_prompt(self, value: str | None) -> None:
         if value is None:
             return
         self._metadata_search_query = value.strip()
-        self._do_fetch_metadata()
+        self._do_manual_search()
+
+    def _do_manual_search(self) -> None:
+        if self._operation_busy:
+            return
+        manual_query, manual_hints = self._manual_search_request()
+        search_text = combine_search_text(
+            manual_query,
+            artist=manual_hints[0],
+            album=manual_hints[1],
+            year=manual_hints[2],
+        )
+        if not search_text:
+            self._log("[yellow]![/yellow] Enter search terms or fill in Artist/Album before using Manual Search.")
+            return
+        self.phase = "detecting"
+        self._operation_busy = True
+        self._log("> Running manual metadata search...")
+        self._log(f"> Search terms: [bold]{search_text}[/bold]")
+        self._candidates = []
+        self._selected_idx = 0
+        self.query_one("#meta-table", DataTable).clear(columns=True)
+        self._set_tracklist_message("[dim](searching metadata...)[/dim]")
+        self._set_metadata_search_controls_disabled(True)
+        self.query_one("#btn-start", Button).disabled = True
+        self._refresh_eject_button()
+        self._refresh_output_button()
+        self._refresh_extras_button()
+        self._refresh_import_buttons()
+        self._start_meta_fetch(
+            self._sources_dict(),
+            manual_query=manual_query,
+            manual_hints=manual_hints,
+            manual_search=True,
+        )
 
     def _do_import(self) -> None:
         if self._operation_busy:

@@ -209,7 +209,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         debug=meta_debug,
         metadata_file=args.metadata_file or "",
         metadata_url=metadata_url,
-        manual_hints=(args.artist or "", args.album or "", args.year or ""),
+        cdtext_driver=cfg.cdrdao_driver,
     )
 
     if not candidates:

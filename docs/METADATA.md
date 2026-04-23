@@ -1,20 +1,53 @@
 # Metadata
 
-DiscVault identifies discs by their physical structure (TOC), not audio fingerprinting. This works well for discs that exist in online databases, and you can always provide metadata manually via imports or CLI flags.
+DiscVault identifies discs by their physical structure (TOC), not audio fingerprinting. This works well for discs that exist in online databases, and you can always provide metadata manually via imports, Manual Search in the TUI, or CLI tag overrides.
 
-## Lookup Order
+## Metadata Paths
 
-When you search for metadata, DiscVault queries sources in this order:
+DiscVault has three distinct metadata paths:
 
-1. **Imported file** - `.cue`, `.toc`, `.json`, or `.toml` via `--metadata-file`
-2. **Imported URL** - Bandcamp album URL via `--metadata-url`
-3. **CD-Text** - Metadata embedded on the disc itself
-4. **Local CDDB cache** - `~/.cddb` directory
-5. **MusicBrainz** - Via disc ID and TOC
-6. **GnuDB** - Via CDDBP (disabled by default)
-7. **Discogs** - Via search with artist/album hints
+1. **Imports** - Explicit metadata from a file or supported URL.
+2. **Automatic disc lookup** - Enabled automatic sources that identify the inserted disc.
+3. **Manual Search** - Explicit text search in the TUI.
 
-The first source that returns a match is used. You can enable/disable sources in your config file or the TUI settings.
+DiscVault collects candidates from the providers it runs and deduplicates them. In the TUI you can choose among the candidates; in non-interactive CLI runs, the first candidate is auto-selected.
+
+## Automatic Disc Lookup
+
+Automatic disc lookup is what runs on disc insert, on `F5`, and when you use the TUI `Sources…` dialog.
+
+The automatic lookup order is:
+
+1. **CD-Text** - Metadata embedded on the disc itself
+2. **Local CDDB cache** - `~/.cddb` directory
+3. **MusicBrainz** - Via disc ID or TOC fallback
+4. **GnuDB** - Via FreeDB/CDDB disc ID
+
+Only these automatic sources appear in the config defaults and the TUI source picker.
+
+## Manual Search
+
+Manual Search is separate from automatic lookup.
+
+- **MusicBrainz search** - Text search by artist, album, year, or free-form terms
+- **Discogs** - Text search seeded from your explicit search terms and any MusicBrainz search matches
+
+Discogs is manual-search-only. It is not part of normal automatic metadata lookup and does not appear in the automatic source list.
+
+If you leave the Manual Search prompt empty, DiscVault falls back to the current Artist/Album/Year fields as the search text.
+
+## Imports
+
+Imports are explicit user actions rather than automatic metadata sources:
+
+1. **Imported file** - `.cue`, `.toc`, `.json`, or `.toml` via `--metadata-file` or the TUI Import dialog
+2. **Imported URL** - Supported page URLs via `--metadata-url` or the TUI Import dialog
+
+Currently supported URL imports:
+
+- **Bandcamp album URLs** - e.g., `https://artist.bandcamp.com/album/title`
+
+Bandcamp is an import source, not part of automatic lookup or Manual Search.
 
 ## Disc Identification
 
@@ -99,10 +132,6 @@ artist = "Artist Name"
 ```
 
 ## URL Import
-
-Currently supported:
-
-- **Bandcamp album URLs** - e.g., `https://artist.bandcamp.com/album/title`
 
 Bandcamp import fetches album artist, title, track listing, and cover art URL.
 

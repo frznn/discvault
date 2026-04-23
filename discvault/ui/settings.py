@@ -127,12 +127,11 @@ class ConfigScreen(ModalScreen[Config | None]):
                 "cfg-sample-offset",
                 str(self._cfg.cdparanoia_sample_offset),
             ),
-            Static("Default metadata sources (used on startup):", classes="cfg-section-label"),
+            Static("Default automatic metadata sources (used on startup):", classes="cfg-section-label"),
             self._check_row(
                 ("CD-Text", "cfg-src-cdtext", self._cfg.default_src_cdtext),
                 ("MusicBrainz", "cfg-src-mb", self._cfg.default_src_musicbrainz),
                 ("GnuDB", "cfg-src-gnudb", self._cfg.default_src_gnudb),
-                ("Discogs", "cfg-src-discogs", self._cfg.default_src_discogs),
             ),
             self._check_row(
                 ("Use local CDDB cache", "cfg-cache", self._cfg.use_local_cddb_cache),
@@ -176,7 +175,7 @@ class ConfigScreen(ModalScreen[Config | None]):
             self._input_row("GnuDB program", "cfg-hello-program", self._cfg.gnudb.hello_program),
             self._input_row("GnuDB version", "cfg-hello-version", self._cfg.gnudb.hello_version),
             self._input_row(
-                "Discogs token (improves reliability/rate limits)",
+                "Discogs token (manual search only)",
                 "cfg-discogs-token",
                 self._cfg.discogs.token,
             ),
@@ -245,7 +244,6 @@ class ConfigScreen(ModalScreen[Config | None]):
         cfg.default_src_cdtext = self._check("cfg-src-cdtext")
         cfg.default_src_musicbrainz = self._check("cfg-src-mb")
         cfg.default_src_gnudb = self._check("cfg-src-gnudb")
-        cfg.default_src_discogs = self._check("cfg-src-discogs")
         completion_sound = self.query_one("#cfg-completion-sound", Select).value
         if completion_sound in {"bell", "chime", "both", "off"}:
             cfg.completion_sound = completion_sound
