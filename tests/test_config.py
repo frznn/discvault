@@ -71,6 +71,52 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(cfg.default_src_musicbrainz)
         self.assertFalse(cfg.default_src_gnudb)
 
+    def test_metadata_source_order_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config()
+                cfg.metadata_source_order = ["gnudb", "cdtext", "musicbrainz"]
+                cfg.save()
+                loaded = config_mod.Config.load()
+                saved_text = config_path.read_text()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertEqual(loaded.metadata_source_order, ["gnudb", "cdtext", "musicbrainz"])
+        self.assertIn('metadata_source_order = ["gnudb", "cdtext", "musicbrainz"]', saved_text)
+
+    def test_metadata_source_order_defaults_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text("[discvault]\n")
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config.load()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertEqual(cfg.metadata_source_order, ["cdtext", "musicbrainz", "gnudb"])
+
+    def test_metadata_source_order_drops_unknown_and_fills_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                "[discvault]\n"
+                'metadata_source_order = ["discogs", "gnudb", "musicbrainz"]\n'
+            )
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config.load()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertEqual(cfg.metadata_source_order, ["gnudb", "musicbrainz", "cdtext"])
+
     def test_completion_sound_is_normalized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"

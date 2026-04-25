@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from ..config import Config
+from ..config import Config, DEFAULT_METADATA_SOURCE_ORDER, METADATA_SOURCE_KEYS
 from .sanitize import trim
 from .types import DiscInfo, Metadata
 from . import musicbrainz, gnudb, local, discogs, fileimport, urlimport, cdtext
@@ -32,13 +32,16 @@ def fetch_candidates(
     manual_search: bool = False,
     manual_search_disc_info: DiscInfo | None = None,
     cdtext_driver: str = "",
+    source_order: list[str] | None = None,
     callbacks: LookupCallbacks | None = None,
 ) -> list[Metadata]:
     """
     Query metadata providers and return a deduplicated list of candidates.
 
-    Automatic lookup order: imported file → metadata URL → CD-Text → local cache
-    → MusicBrainz disc lookup → GnuDB.
+    Automatic lookup runs imports first (file → URL), then the local CDDB cache,
+    then the user-priority online providers (CD-Text, MusicBrainz, GnuDB) in the
+    order given by ``source_order`` (falling back to ``cfg.metadata_source_order``
+    and then the default order).
 
     Manual search providers are separate from normal disc lookup. When
     ``manual_search`` is true, this function queries MusicBrainz text search
@@ -51,6 +54,7 @@ def fetch_candidates(
     use_cdtext = sources.get("cdtext", True)
     use_mb = sources.get("musicbrainz", True)
     use_gnudb = sources.get("gnudb", True)
+    ordered_sources = _resolve_source_order(source_order, cfg)
     hint_artist = hint_album = hint_year = ""
     if manual_hints:
         hint_artist, hint_album, hint_year = (trim(part) for part in manual_hints)
@@ -160,70 +164,99 @@ def fetch_candidates(
             _skip("Discogs", "no search terms")
         return results
 
-    # 1. CD-Text (from disc itself — fast and authoritative when present)
-    if use_cdtext and disc_info.device:
-        _run(
-            "CD-Text",
-            lambda: cdtext.lookup(
-                disc_info,
-                driver=cdtext_driver,
-                timeout=cfg.metadata_timeout,
-                debug=debug,
-            ),
-        )
-    elif use_cdtext:
-        _skip("CD-Text", "no disc device")
-
-    # 2. Local CDDB cache
+    # Local CDDB cache runs before online providers regardless of order — it
+    # is a free short-circuit and not part of the user-editable priority list.
     if cfg.use_local_cddb_cache and disc_info.freedb_disc_id:
         _run("Local CDDB cache", lambda: local.lookup(disc_info, debug=debug))
     elif cfg.use_local_cddb_cache:
         _skip("Local CDDB cache", "no FreeDB disc ID")
 
-    # 3. MusicBrainz disc lookup
-    if use_mb and (disc_info.mb_disc_id or disc_info.mb_toc):
-        _run(
-            "MusicBrainz",
-            lambda: musicbrainz.lookup(
-                disc_info,
-                timeout=cfg.metadata_timeout,
-                debug=debug,
-            ),
-        )
-    elif use_mb:
-        _skip("MusicBrainz", "no disc ID")
-
-    # 4. GnuDB HTTP + CDDBP
-    if use_gnudb and disc_info.freedb_disc_id:
-        # Limit to first hello string — trying all variants multiplies requests
-        hello_values = gnudb.build_hello_values(
-            cfg.gnudb.hello_user, cfg.gnudb.hello_program, cfg.gnudb.hello_version
-        )[:1]
-        _run(
-            "GnuDB HTTP",
-            lambda: gnudb.lookup_http(
-                disc_info,
-                hello_values,
-                timeout=cfg.metadata_timeout,
-                cache_enabled=cfg.use_local_cddb_cache,
-                debug=debug,
-            ),
-        )
-
-        if cfg.gnudb.host:
-            _run(
-                f"GnuDB CDDBP ({cfg.gnudb.host})",
-                lambda: gnudb.lookup_cddbp(
-                    disc_info,
-                    hello_values,
-                    host=cfg.gnudb.host,
-                    port=cfg.gnudb.port,
-                    timeout=cfg.metadata_timeout,
-                    cache_enabled=cfg.use_local_cddb_cache,
-                    debug=debug,
-                ),
-            )
-    elif use_gnudb:
-        _skip("GnuDB", "no FreeDB disc ID")
+    for key in ordered_sources:
+        if key == "cdtext":
+            if not use_cdtext:
+                continue
+            if disc_info.device:
+                _run(
+                    "CD-Text",
+                    lambda: cdtext.lookup(
+                        disc_info,
+                        driver=cdtext_driver,
+                        timeout=cfg.metadata_timeout,
+                        debug=debug,
+                    ),
+                )
+            else:
+                _skip("CD-Text", "no disc device")
+        elif key == "musicbrainz":
+            if not use_mb:
+                continue
+            if disc_info.mb_disc_id or disc_info.mb_toc:
+                _run(
+                    "MusicBrainz",
+                    lambda: musicbrainz.lookup(
+                        disc_info,
+                        timeout=cfg.metadata_timeout,
+                        debug=debug,
+                    ),
+                )
+            else:
+                _skip("MusicBrainz", "no disc ID")
+        elif key == "gnudb":
+            if not use_gnudb:
+                continue
+            if disc_info.freedb_disc_id:
+                # Limit to first hello string — trying all variants multiplies requests
+                hello_values = gnudb.build_hello_values(
+                    cfg.gnudb.hello_user, cfg.gnudb.hello_program, cfg.gnudb.hello_version
+                )[:1]
+                _run(
+                    "GnuDB HTTP",
+                    lambda hv=hello_values: gnudb.lookup_http(
+                        disc_info,
+                        hv,
+                        timeout=cfg.metadata_timeout,
+                        cache_enabled=cfg.use_local_cddb_cache,
+                        debug=debug,
+                    ),
+                )
+                if cfg.gnudb.host:
+                    _run(
+                        f"GnuDB CDDBP ({cfg.gnudb.host})",
+                        lambda hv=hello_values: gnudb.lookup_cddbp(
+                            disc_info,
+                            hv,
+                            host=cfg.gnudb.host,
+                            port=cfg.gnudb.port,
+                            timeout=cfg.metadata_timeout,
+                            cache_enabled=cfg.use_local_cddb_cache,
+                            debug=debug,
+                        ),
+                    )
+            else:
+                _skip("GnuDB", "no FreeDB disc ID")
 
     return results
+
+
+def _resolve_source_order(
+    order: list[str] | None,
+    cfg: Config,
+) -> list[str]:
+    candidates: list[str] = []
+    if order:
+        candidates = list(order)
+    else:
+        cfg_order = getattr(cfg, "metadata_source_order", None)
+        if cfg_order:
+            candidates = list(cfg_order)
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in candidates:
+        key = item.strip().lower() if isinstance(item, str) else ""
+        if key in METADATA_SOURCE_KEYS and key not in seen:
+            result.append(key)
+            seen.add(key)
+    for key in DEFAULT_METADATA_SOURCE_ORDER:
+        if key not in seen:
+            result.append(key)
+    return result

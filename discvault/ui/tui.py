@@ -453,6 +453,7 @@ class DiscvaultApp(App[None]):
         self._src_cdtext = cfg.default_src_cdtext
         self._src_mb = cfg.default_src_musicbrainz
         self._src_gnudb = cfg.default_src_gnudb
+        self._src_order = list(cfg.metadata_source_order)
         self._out_image = not args.no_image
         self._out_iso = bool(getattr(args, "iso", False))
         self._out_flac = not args.no_flac
@@ -1235,6 +1236,7 @@ class DiscvaultApp(App[None]):
         manual_query: str = "",
         manual_hints: tuple[str, str, str] | None = None,
         manual_search: bool = False,
+        source_order: list[str] | None = None,
     ) -> None:
         """Fetch metadata — runs in a worker thread (called from detect or meta worker).
         If merge=True, new results are added to existing candidates instead of replacing them.
@@ -1295,6 +1297,7 @@ class DiscvaultApp(App[None]):
             manual_search=manual_search,
             manual_search_disc_info=manual_search_disc_info,
             cdtext_driver=cfg.cdrdao_driver,
+            source_order=list(source_order) if source_order else list(self._src_order),
             callbacks=callbacks,
         )
         if merge:
@@ -1348,6 +1351,7 @@ class DiscvaultApp(App[None]):
         manual_query: str = "",
         manual_hints: tuple[str, str, str] | None = None,
         manual_search: bool = False,
+        source_order: list[str] | None = None,
     ) -> None:
         """Re-fetch metadata (F5 / Manual Search button). Runs in its own worker thread."""
         try:
@@ -1357,6 +1361,7 @@ class DiscvaultApp(App[None]):
                 manual_query=manual_query,
                 manual_hints=manual_hints,
                 manual_search=manual_search,
+                source_order=source_order,
             )
         except Exception as exc:
             self._tlog(f"[bold red]✗ Metadata error: {exc}[/bold red]")
@@ -1699,7 +1704,14 @@ class DiscvaultApp(App[None]):
     def _open_metadata_search(self) -> None:
         if self.phase == "running" or self._operation_busy:
             return
-        self.push_screen(SourceSelectScreen(self._sources_dict()), self._apply_search_sources)
+        self.push_screen(
+            SourceSelectScreen(
+                self._sources_dict(),
+                list(self._src_order),
+                on_save=self._save_source_preferences,
+            ),
+            self._apply_search_sources,
+        )
 
     def _open_manual_search(self) -> None:
         if self.phase == "running" or self._operation_busy:
@@ -1821,18 +1833,48 @@ class DiscvaultApp(App[None]):
         self._src_cdtext = self._cfg.default_src_cdtext
         self._src_mb = self._cfg.default_src_musicbrainz
         self._src_gnudb = self._cfg.default_src_gnudb
+        self._src_order = list(self._cfg.metadata_source_order)
         self._cover_art_selected = self._cfg.download_cover_art
         self._update_target_input()
         self._update_cover_art_checkbox()
         self._log("[green]✓[/green] Settings saved. Use [bold]Manual Search[/bold] for Discogs or text-based metadata searches.")
 
-    def _apply_search_sources(self, sources: dict[str, bool] | None) -> None:
-        if sources is None:
+    def _apply_search_sources(self, result: dict | None) -> None:
+        if not isinstance(result, dict):
             return
-        self._src_cdtext = sources.get("cdtext", False)
-        self._src_mb = sources.get("musicbrainz", False)
-        self._src_gnudb = sources.get("gnudb", False)
-        self._do_fetch_metadata(sources)
+        if result.get("action") != "fetch":
+            return
+        sources = result.get("sources", {}) or {}
+        order_raw = result.get("order")
+        order = [str(item) for item in order_raw] if isinstance(order_raw, list) and order_raw else None
+        sources_dict = {
+            "cdtext": bool(sources.get("cdtext", False)),
+            "musicbrainz": bool(sources.get("musicbrainz", False)),
+            "gnudb": bool(sources.get("gnudb", False)),
+        }
+        self._do_fetch_metadata(sources_dict, source_order=order)
+
+    def _save_source_preferences(
+        self,
+        sources: dict[str, bool],
+        order: list[str],
+    ) -> bool:
+        self._src_cdtext = bool(sources.get("cdtext", False))
+        self._src_mb = bool(sources.get("musicbrainz", False))
+        self._src_gnudb = bool(sources.get("gnudb", False))
+        if order:
+            self._src_order = [str(item) for item in order]
+        self._cfg.default_src_cdtext = self._src_cdtext
+        self._cfg.default_src_musicbrainz = self._src_mb
+        self._cfg.default_src_gnudb = self._src_gnudb
+        self._cfg.metadata_source_order = list(self._src_order)
+        try:
+            self._cfg.save()
+        except OSError as exc:
+            self._log(f"[bold red]✗ Failed to save sources: {exc}[/bold red]")
+            return False
+        self._log("[green]✓[/green] Sources saved.")
+        return True
 
     def _apply_outputs(self, outputs: dict[str, bool] | None) -> None:
         if outputs is None:
@@ -1904,7 +1946,12 @@ class DiscvaultApp(App[None]):
         self._log(f"[green]✓[/green] {detail}")
         self._show_extras_selector()
 
-    def _do_fetch_metadata(self, sources: dict[str, bool] | None = None) -> None:
+    def _do_fetch_metadata(
+        self,
+        sources: dict[str, bool] | None = None,
+        *,
+        source_order: list[str] | None = None,
+    ) -> None:
         sources = sources or self._sources_dict()
         active = [k for k, v in sources.items() if v]
         if not active:
@@ -1927,6 +1974,7 @@ class DiscvaultApp(App[None]):
         self._refresh_import_buttons()
         self._start_meta_fetch(
             sources,
+            source_order=source_order,
         )
 
     def _apply_manual_search_prompt(self, value: str | None) -> None:

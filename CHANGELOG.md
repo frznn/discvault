@@ -6,6 +6,10 @@ The project history starts at `v0.1`.
 
 ## [Unreleased]
 
+### Added
+
+- Editable priority list for automatic metadata sources in the TUI `Sources…` dialog: CD-Text, MusicBrainz, and GnuDB can be reordered with `↑`/`↓` buttons, and the chosen order is persisted to `metadata_source_order` in the config file.
+
 ### Changed
 
 - The CLI and TUI metadata flows now share one lookup engine, so automatic lookup and Manual Search follow the same provider rules.

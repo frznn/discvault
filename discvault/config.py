@@ -45,6 +45,9 @@ DEFAULT_CDRDAO_COMMAND = (
     " --datafile {datafile} {toc}"
 )
 
+METADATA_SOURCE_KEYS: tuple[str, ...] = ("cdtext", "musicbrainz", "gnudb")
+DEFAULT_METADATA_SOURCE_ORDER: list[str] = list(METADATA_SOURCE_KEYS)
+
 
 @dataclass
 class Config:
@@ -59,6 +62,7 @@ class Config:
     default_src_cdtext: bool = True
     default_src_musicbrainz: bool = True
     default_src_gnudb: bool = False
+    metadata_source_order: list[str] = field(default_factory=lambda: list(DEFAULT_METADATA_SOURCE_ORDER))
     use_local_cddb_cache: bool = True
     accuraterip_enabled: bool = False
     download_cover_art: bool = True
@@ -129,6 +133,9 @@ class Config:
         cfg.default_src_cdtext = _as_bool(dv.get("default_src_cdtext"), cfg.default_src_cdtext)
         cfg.default_src_musicbrainz = _src_default("default_src_musicbrainz", True)
         cfg.default_src_gnudb = _src_default("default_src_gnudb", False)
+        cfg.metadata_source_order = _normalize_source_order(
+            dv.get("metadata_source_order")
+        )
         cfg.use_local_cddb_cache = _as_bool(
             dv.get("use_local_cddb_cache", cfg.use_local_cddb_cache),
             cfg.use_local_cddb_cache,
@@ -185,6 +192,7 @@ class Config:
             f"default_src_cdtext = {str(self.default_src_cdtext).lower()}",
             f"default_src_musicbrainz = {str(self.default_src_musicbrainz).lower()}",
             f"default_src_gnudb = {str(self.default_src_gnudb).lower()}",
+            f"metadata_source_order = {_toml_string_array(self.metadata_source_order)}",
             f"use_local_cddb_cache = {str(self.use_local_cddb_cache).lower()}",
             f"accuraterip_enabled = {str(self.accuraterip_enabled).lower()}",
             f"download_cover_art = {str(self.download_cover_art).lower()}",
@@ -264,6 +272,24 @@ def first_run_setup(cfg: Config) -> None:
     except OSError as e:
         _print(f"[yellow]Warning:[/yellow] could not save config: {e}")
     _print()
+
+
+def _normalize_source_order(value: object) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return list(DEFAULT_METADATA_SOURCE_ORDER)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        key = item.strip().lower()
+        if key in METADATA_SOURCE_KEYS and key not in seen:
+            ordered.append(key)
+            seen.add(key)
+    for key in DEFAULT_METADATA_SOURCE_ORDER:
+        if key not in seen:
+            ordered.append(key)
+    return ordered
 
 
 def _normalize_metadata_source(value: str) -> str:
@@ -358,3 +384,7 @@ def _as_int(value: object, default: int) -> int:
 
 def _toml_string(value: str) -> str:
     return json.dumps(value)
+
+
+def _toml_string_array(values: list[str]) -> str:
+    return "[" + ", ".join(_toml_string(v) for v in values) + "]"
