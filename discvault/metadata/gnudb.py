@@ -362,6 +362,11 @@ def parse_cddb_record(text: str, source: str = "GnuDB") -> Metadata | None:
         album = dtitle
         album_artist = dartist
 
+    # Some submitters redundantly prefix the album with "Artist - " on the
+    # album side of DTITLE. Strip it only when the prefix matches the artist
+    # we already determined, so legitimate hyphens are left untouched.
+    album = _strip_artist_prefix(album, album_artist)
+
     year = dyear if (dyear.isdigit() and len(dyear) == 4) else ""
 
     tracks: list[Track] = []
@@ -374,7 +379,12 @@ def parse_cddb_record(text: str, source: str = "GnuDB") -> Metadata | None:
             track_artist = trim(title.split(" / ", 1)[0])
             title = trim(title.split(" / ", 1)[1])
         else:
-            track_artist = ""
+            stripped = _strip_artist_prefix(title, album_artist)
+            if stripped != title:
+                track_artist = album_artist
+                title = stripped
+            else:
+                track_artist = ""
         if title:
             tracks.append(Track(number=track_num, title=title, artist=track_artist))
 
@@ -388,6 +398,26 @@ def parse_cddb_record(text: str, source: str = "GnuDB") -> Metadata | None:
         year=year,
         tracks=tracks,
     )
+
+
+def _strip_artist_prefix(text: str, artist: str) -> str:
+    """Strip a leading "<artist><dash>" segment from text, case-insensitively.
+
+    Recognises ASCII " - ", en-dash " – ", and em-dash " — " separators.
+    Returns the original text when the artist is empty or the prefix does
+    not match, so legitimate hyphens inside titles are not touched.
+    """
+    text = trim(text)
+    artist = trim(artist)
+    if not artist or not text:
+        return text
+    lowered = text.casefold()
+    artist_low = artist.casefold()
+    for sep in (" - ", " – ", " — "):
+        prefix = artist_low + sep
+        if lowered.startswith(prefix):
+            return trim(text[len(prefix):])
+    return text
 
 
 # ---------------------------------------------------------------------------
