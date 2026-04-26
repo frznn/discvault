@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from discvault.config import Config
 from discvault.metadata.lookup import LookupCallbacks, fetch_candidates
-from discvault.metadata.types import DiscInfo
+from discvault.metadata.types import DiscInfo, Metadata
 
 
 class LookupTests(unittest.TestCase):
@@ -123,6 +123,153 @@ class LookupTests(unittest.TestCase):
             )
 
         self.assertEqual(events, ["MusicBrainz", "CD-Text", "GnuDB HTTP"])
+
+
+    def test_short_circuit_stops_priority_loop_on_first_match(self) -> None:
+        cfg = Config()
+        cfg.use_local_cddb_cache = False
+        disc_info = DiscInfo(
+            device="/dev/cdrom",
+            track_count=8,
+            mb_disc_id="disc-id",
+            freedb_disc_id="12345678",
+        )
+
+        events: list[str] = []
+
+        with patch(
+            "discvault.metadata.cdtext.lookup",
+            return_value=[Metadata(source="CD-Text", album_artist="X", album="A")],
+        ), patch("discvault.metadata.musicbrainz.lookup", return_value=[]) as mb, \
+            patch("discvault.metadata.gnudb.lookup_http", return_value=[]) as gnudb_http:
+            fetch_candidates(
+                disc_info,
+                cfg,
+                sources={"cdtext": True, "musicbrainz": True, "gnudb": True},
+                source_order=["cdtext", "musicbrainz", "gnudb"],
+                callbacks=LookupCallbacks(on_start=events.append),
+            )
+
+        self.assertEqual(events, ["CD-Text"])
+        mb.assert_not_called()
+        gnudb_http.assert_not_called()
+
+    def test_short_circuit_disabled_collects_from_every_source(self) -> None:
+        cfg = Config()
+        cfg.use_local_cddb_cache = False
+        cfg.lookup_stop_at_first_match = False
+        disc_info = DiscInfo(
+            device="/dev/cdrom",
+            track_count=8,
+            mb_disc_id="disc-id",
+            freedb_disc_id="12345678",
+        )
+
+        events: list[str] = []
+
+        with patch(
+            "discvault.metadata.cdtext.lookup",
+            return_value=[Metadata(source="CD-Text", album_artist="X", album="A")],
+        ), patch(
+            "discvault.metadata.musicbrainz.lookup",
+            return_value=[Metadata(source="MusicBrainz", album_artist="X", album="B")],
+        ), patch("discvault.metadata.gnudb.lookup_http", return_value=[]):
+            fetch_candidates(
+                disc_info,
+                cfg,
+                sources={"cdtext": True, "musicbrainz": True, "gnudb": True},
+                source_order=["cdtext", "musicbrainz", "gnudb"],
+                callbacks=LookupCallbacks(on_start=events.append),
+            )
+
+        self.assertEqual(events, ["CD-Text", "MusicBrainz", "GnuDB HTTP"])
+
+    def test_short_circuit_walks_past_empty_providers(self) -> None:
+        cfg = Config()
+        cfg.use_local_cddb_cache = False
+        disc_info = DiscInfo(
+            device="/dev/cdrom",
+            track_count=8,
+            mb_disc_id="disc-id",
+            freedb_disc_id="12345678",
+        )
+
+        events: list[str] = []
+
+        with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
+            patch("discvault.metadata.musicbrainz.lookup", return_value=[]), \
+            patch(
+                "discvault.metadata.gnudb.lookup_http",
+                return_value=[Metadata(source="GnuDB", album_artist="X", album="C")],
+            ):
+            fetch_candidates(
+                disc_info,
+                cfg,
+                sources={"cdtext": True, "musicbrainz": True, "gnudb": True},
+                source_order=["cdtext", "musicbrainz", "gnudb"],
+                callbacks=LookupCallbacks(on_start=events.append),
+            )
+
+        self.assertEqual(events, ["CD-Text", "MusicBrainz", "GnuDB HTTP"])
+
+    def test_short_circuit_cache_hit_skips_priority_loop(self) -> None:
+        cfg = Config()
+        disc_info = DiscInfo(
+            device="/dev/cdrom",
+            track_count=8,
+            mb_disc_id="disc-id",
+            freedb_disc_id="12345678",
+        )
+
+        events: list[str] = []
+
+        with patch(
+            "discvault.metadata.local.lookup",
+            return_value=[Metadata(source="Local", album_artist="X", album="D")],
+        ), patch("discvault.metadata.cdtext.lookup", return_value=[]) as cdtext_lookup, \
+            patch("discvault.metadata.musicbrainz.lookup", return_value=[]) as mb_lookup, \
+            patch("discvault.metadata.gnudb.lookup_http", return_value=[]) as gnudb_http:
+            fetch_candidates(
+                disc_info,
+                cfg,
+                sources={"cdtext": True, "musicbrainz": True, "gnudb": True},
+                callbacks=LookupCallbacks(on_start=events.append),
+            )
+
+        self.assertEqual(events, ["Local CDDB cache"])
+        cdtext_lookup.assert_not_called()
+        mb_lookup.assert_not_called()
+        gnudb_http.assert_not_called()
+
+    def test_short_circuit_gnudb_http_hit_skips_cddbp(self) -> None:
+        cfg = Config()
+        cfg.use_local_cddb_cache = False
+        cfg.gnudb.host = "gnudb.example"
+        disc_info = DiscInfo(
+            device="/dev/cdrom",
+            track_count=8,
+            mb_disc_id="disc-id",
+            freedb_disc_id="12345678",
+        )
+
+        events: list[str] = []
+
+        with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
+            patch("discvault.metadata.musicbrainz.lookup", return_value=[]), \
+            patch(
+                "discvault.metadata.gnudb.lookup_http",
+                return_value=[Metadata(source="GnuDB", album_artist="X", album="E")],
+            ), patch("discvault.metadata.gnudb.lookup_cddbp", return_value=[]) as cddbp:
+            fetch_candidates(
+                disc_info,
+                cfg,
+                sources={"cdtext": True, "musicbrainz": True, "gnudb": True},
+                source_order=["gnudb", "cdtext", "musicbrainz"],
+                callbacks=LookupCallbacks(on_start=events.append),
+            )
+
+        self.assertEqual(events, ["GnuDB HTTP"])
+        cddbp.assert_not_called()
 
 
 if __name__ == "__main__":

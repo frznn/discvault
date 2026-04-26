@@ -164,14 +164,20 @@ def fetch_candidates(
             _skip("Discogs", "no search terms")
         return results
 
+    short_circuit = bool(getattr(cfg, "lookup_stop_at_first_match", True))
+
     # Local CDDB cache runs before online providers regardless of order — it
     # is a free short-circuit and not part of the user-editable priority list.
+    cache_before = len(results)
     if cfg.use_local_cddb_cache and disc_info.freedb_disc_id:
         _run("Local CDDB cache", lambda: local.lookup(disc_info, debug=debug))
     elif cfg.use_local_cddb_cache:
         _skip("Local CDDB cache", "no FreeDB disc ID")
+    if short_circuit and len(results) > cache_before:
+        return results
 
     for key in ordered_sources:
+        before = len(results)
         if key == "cdtext":
             if not use_cdtext:
                 continue
@@ -209,6 +215,7 @@ def fetch_candidates(
                 hello_values = gnudb.build_hello_values(
                     cfg.gnudb.hello_user, cfg.gnudb.hello_program, cfg.gnudb.hello_version
                 )[:1]
+                http_before = len(results)
                 _run(
                     "GnuDB HTTP",
                     lambda hv=hello_values: gnudb.lookup_http(
@@ -219,7 +226,8 @@ def fetch_candidates(
                         debug=debug,
                     ),
                 )
-                if cfg.gnudb.host:
+                http_hit = len(results) > http_before
+                if cfg.gnudb.host and not (short_circuit and http_hit):
                     _run(
                         f"GnuDB CDDBP ({cfg.gnudb.host})",
                         lambda hv=hello_values: gnudb.lookup_cddbp(
@@ -234,6 +242,9 @@ def fetch_candidates(
                     )
             else:
                 _skip("GnuDB", "no FreeDB disc ID")
+
+        if short_circuit and len(results) > before:
+            break
 
     return results
 

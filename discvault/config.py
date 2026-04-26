@@ -63,6 +63,7 @@ class Config:
     default_src_musicbrainz: bool = True
     default_src_gnudb: bool = False
     metadata_source_order: list[str] = field(default_factory=lambda: list(DEFAULT_METADATA_SOURCE_ORDER))
+    lookup_stop_at_first_match: bool = True
     use_local_cddb_cache: bool = True
     accuraterip_enabled: bool = False
     download_cover_art: bool = True
@@ -136,6 +137,10 @@ class Config:
         cfg.metadata_source_order = _normalize_source_order(
             dv.get("metadata_source_order")
         )
+        cfg.lookup_stop_at_first_match = _as_bool(
+            dv.get("lookup_stop_at_first_match"),
+            cfg.lookup_stop_at_first_match,
+        )
         cfg.use_local_cddb_cache = _as_bool(
             dv.get("use_local_cddb_cache", cfg.use_local_cddb_cache),
             cfg.use_local_cddb_cache,
@@ -193,6 +198,7 @@ class Config:
             f"default_src_musicbrainz = {str(self.default_src_musicbrainz).lower()}",
             f"default_src_gnudb = {str(self.default_src_gnudb).lower()}",
             f"metadata_source_order = {_toml_string_array(self.metadata_source_order)}",
+            f"lookup_stop_at_first_match = {str(self.lookup_stop_at_first_match).lower()}",
             f"use_local_cddb_cache = {str(self.use_local_cddb_cache).lower()}",
             f"accuraterip_enabled = {str(self.accuraterip_enabled).lower()}",
             f"download_cover_art = {str(self.download_cover_art).lower()}",

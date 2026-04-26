@@ -134,6 +134,13 @@ class ConfigScreen(ModalScreen[Config | None]):
                 ("GnuDB", "cfg-src-gnudb", self._cfg.default_src_gnudb),
             ),
             self._check_row(
+                (
+                    "Stop at first match",
+                    "cfg-stop-first-match",
+                    self._cfg.lookup_stop_at_first_match,
+                ),
+            ),
+            self._check_row(
                 ("Use local CDDB cache", "cfg-cache", self._cfg.use_local_cddb_cache),
                 ("Enable AccurateRip", "cfg-accuraterip", self._cfg.accuraterip_enabled),
             ),
@@ -244,6 +251,7 @@ class ConfigScreen(ModalScreen[Config | None]):
         cfg.default_src_cdtext = self._check("cfg-src-cdtext")
         cfg.default_src_musicbrainz = self._check("cfg-src-mb")
         cfg.default_src_gnudb = self._check("cfg-src-gnudb")
+        cfg.lookup_stop_at_first_match = self._check("cfg-stop-first-match")
         completion_sound = self.query_one("#cfg-completion-sound", Select).value
         if completion_sound in {"bell", "chime", "both", "off"}:
             cfg.completion_sound = completion_sound

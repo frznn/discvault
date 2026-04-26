@@ -101,6 +101,36 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.metadata_source_order, ["cdtext", "musicbrainz", "gnudb"])
 
+    def test_lookup_stop_at_first_match_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config()
+                cfg.lookup_stop_at_first_match = False
+                cfg.save()
+                loaded = config_mod.Config.load()
+                saved_text = config_path.read_text()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertFalse(loaded.lookup_stop_at_first_match)
+        self.assertIn("lookup_stop_at_first_match = false", saved_text)
+
+    def test_lookup_stop_at_first_match_defaults_to_true_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text("[discvault]\n")
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config.load()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertTrue(cfg.lookup_stop_at_first_match)
+
     def test_metadata_source_order_drops_unknown_and_fills_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"

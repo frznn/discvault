@@ -12,6 +12,7 @@ The project history starts at `v0.1`.
 
 ### Changed
 
+- Automatic metadata lookup now stops as soon as the first enabled source returns a result (including the local CDDB cache). Set `lookup_stop_at_first_match = false` in the config to keep the previous behavior of querying every enabled source and merging all candidates.
 - The CLI and TUI metadata flows now share one lookup engine, so automatic lookup and Manual Search follow the same provider rules.
 - Automatic metadata sources are now limited to disc-lookup providers: CD-Text, local CDDB cache, MusicBrainz disc lookup, and GnuDB.
 - Discogs has been moved out of automatic source selection and is now queried only during Manual Search; Bandcamp remains URL-import-only.

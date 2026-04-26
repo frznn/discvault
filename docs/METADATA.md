@@ -31,6 +31,8 @@ CD-Text, MusicBrainz, and GnuDB are user-editable. Their on/off state and priori
 
 The Local CDDB cache is not reorderable — it stays anchored before the online providers.
 
+By default, automatic lookup **stops as soon as one source returns a result** (including the local cache). This matches the way the priority list is normally used: the first source you trust most fires first, returns metadata, and the rest of the providers are skipped. Set `lookup_stop_at_first_match = false` in the config file to fall back to the old behavior of querying every enabled source and merging all candidates.
+
 Only these automatic sources appear in the config defaults and the TUI source picker.
 
 ## Manual Search
