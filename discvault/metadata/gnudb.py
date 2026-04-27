@@ -245,29 +245,72 @@ def _save_cache_record(disc_id: str, category: str, record_text: str, debug: boo
 
 
 def _cddbp_exchange(host: str, port: int, commands: list[str], timeout: float) -> str:
-    """Open a TCP connection, send commands, collect the full response."""
+    """Open a TCP connection and run each CDDBP command in turn.
+
+    Some servers (notably gnudb.gnudb.org) reject pipelined commands with
+    "500 Command syntax error", so commands must be sent one at a time and
+    the response read before the next is sent.
+    """
     with socket.create_connection((host, port), timeout=timeout) as s:
         s.settimeout(timeout)
         data = b""
-        # Read welcome banner (first line)
+        # Read banner (single line)
         while b"\n" not in data:
             chunk = s.recv(4096)
             if not chunk:
                 break
             data += chunk
-        # Send all commands
-        payload = "\r\n".join(commands) + "\r\n"
-        s.sendall(payload.encode())
-        # Collect response until timeout or connection close
-        try:
-            while True:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                data += chunk
-        except (socket.timeout, OSError):
-            pass
+
+        # Send each command and read its response before sending the next.
+        for cmd in commands:
+            try:
+                s.sendall(cmd.encode() + b"\r\n")
+            except OSError:
+                break
+            offset = len(data)
+            try:
+                data = _cddbp_read_response(s, data, offset)
+            except (socket.timeout, OSError):
+                break
+            if cmd.strip().lower() == "quit":
+                break
     return data.decode(errors="replace").replace("\r\n", "\n")
+
+
+def _cddbp_read_response(s: socket.socket, buffer: bytes, offset: int) -> bytes:
+    """Read one complete CDDBP response starting at ``offset`` in ``buffer``.
+
+    Single-line responses (most status codes) end at the first ``\\r\\n``
+    after ``offset``. Multi-line responses (codes ``210``, ``211``, ``212``)
+    end at a line containing only ``.`` per the CDDBP spec.
+    """
+    # Wait for the first line to arrive
+    while b"\n" not in buffer[offset:]:
+        chunk = s.recv(4096)
+        if not chunk:
+            return buffer
+        buffer += chunk
+
+    first_line_end_rel = buffer[offset:].index(b"\n")
+    first_line = buffer[offset:offset + first_line_end_rel].rstrip(b"\r")
+
+    is_multi_line = (
+        len(first_line) >= 3
+        and first_line[:3].isdigit()
+        and first_line[:3] in (b"210", b"211", b"212")
+    )
+    if not is_multi_line:
+        return buffer
+
+    # Multi-line: wait for the terminating "." line.
+    while True:
+        rest = buffer[offset + first_line_end_rel:]
+        if b"\r\n.\r\n" in rest or b"\n.\n" in rest:
+            return buffer
+        chunk = s.recv(4096)
+        if not chunk:
+            return buffer
+        buffer += chunk
 
 
 def _parse_query_response(text: str) -> tuple[str, str]:

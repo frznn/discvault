@@ -29,6 +29,7 @@ The project history starts at `v0.1`.
 - Ubuntu-style `python3-libdiscid` installs now count as exact MusicBrainz disc-ID support, so DiscVault no longer depends on a standalone `discid` binary to suppress the TOC-fallback warning.
 - Automatic TUI re-fetches no longer turn the current tag fields into implicit Manual Search terms, which prevents Discogs or MusicBrainz text search from running unless Manual Search is used explicitly.
 - GnuDB records that redundantly prefix the album and track titles with the artist (e.g. `DTITLE=Artist / Artist - Album` and `TTITLE0=Artist - Track`) are now parsed correctly: the album artist is stripped from the album field and the track titles, and the per-track artist is recovered from those entries.
+- GnuDB CDDBP exchanges now send each command separately and wait for its response, instead of pipelining all four commands into one packet. `gnudb.gnudb.org` rejected the pipelined input with `500 Command syntax error` and then left the socket open, costing the full `metadata_timeout` (≈15s with default settings) per query — effectively making the CDDBP path silently broken for that server. The new sequential exchange typically completes in under a second.
 
 ## [0.3] - 2026-04-02
 
