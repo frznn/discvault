@@ -31,6 +31,7 @@ default_src_musicbrainz = true
 default_src_gnudb = false
 metadata_source_order = ["cdtext", "musicbrainz", "gnudb"]
 lookup_stop_at_first_match = true
+lookup_log_timings = false
 manual_src_musicbrainz = true
 manual_src_discogs = true
 use_local_cddb_cache = true
@@ -94,6 +95,7 @@ token = ""
 | `default_src_gnudb` | Query GnuDB (requires `[gnudb]` config) |
 | `metadata_source_order` | Priority order for CD-Text / MusicBrainz / GnuDB during automatic lookup. Edited via the TUI `Sources…` dialog. |
 | `lookup_stop_at_first_match` | Stop automatic lookup as soon as one source returns metadata (default `true`). Set to `false` to query every enabled source and merge all candidates. |
+| `lookup_log_timings` | Append the per-provider duration to the TUI metadata trace (default `false`). Useful for diagnosing slow sources or deciding the priority order. |
 | `manual_src_musicbrainz` | Default state of the MusicBrainz checkbox in the Manual Search dialog (default `true`). |
 | `manual_src_discogs` | Default state of the Discogs checkbox in the Manual Search dialog (default `true`). |
 | `use_local_cddb_cache` | Check `~/.cddb` before online lookup |

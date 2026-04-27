@@ -64,6 +64,7 @@ class Config:
     default_src_gnudb: bool = False
     metadata_source_order: list[str] = field(default_factory=lambda: list(DEFAULT_METADATA_SOURCE_ORDER))
     lookup_stop_at_first_match: bool = True
+    lookup_log_timings: bool = False
     manual_src_musicbrainz: bool = True
     manual_src_discogs: bool = True
     use_local_cddb_cache: bool = True
@@ -143,6 +144,10 @@ class Config:
             dv.get("lookup_stop_at_first_match"),
             cfg.lookup_stop_at_first_match,
         )
+        cfg.lookup_log_timings = _as_bool(
+            dv.get("lookup_log_timings"),
+            cfg.lookup_log_timings,
+        )
         cfg.manual_src_musicbrainz = _as_bool(
             dv.get("manual_src_musicbrainz"),
             cfg.manual_src_musicbrainz,
@@ -209,6 +214,7 @@ class Config:
             f"default_src_gnudb = {str(self.default_src_gnudb).lower()}",
             f"metadata_source_order = {_toml_string_array(self.metadata_source_order)}",
             f"lookup_stop_at_first_match = {str(self.lookup_stop_at_first_match).lower()}",
+            f"lookup_log_timings = {str(self.lookup_log_timings).lower()}",
             f"manual_src_musicbrainz = {str(self.manual_src_musicbrainz).lower()}",
             f"manual_src_discogs = {str(self.manual_src_discogs).lower()}",
             f"use_local_cddb_cache = {str(self.use_local_cddb_cache).lower()}",

@@ -166,6 +166,37 @@ class LookupTests(unittest.TestCase):
         search_releases.assert_not_called()
         discogs_lookup.assert_called_once()
 
+    def test_provider_duration_is_reported_via_on_success(self) -> None:
+        cfg = Config()
+        cfg.use_local_cddb_cache = False
+        disc_info = DiscInfo(
+            device="/dev/cdrom",
+            track_count=8,
+            mb_disc_id="disc-id",
+            freedb_disc_id="12345678",
+        )
+
+        events: list[tuple[str, int, float]] = []
+
+        with patch(
+            "discvault.metadata.cdtext.lookup",
+            return_value=[Metadata(source="CD-Text", album_artist="X", album="A")],
+        ), patch("discvault.metadata.musicbrainz.lookup", return_value=[]), \
+            patch("discvault.metadata.gnudb.lookup_http", return_value=[]):
+            fetch_candidates(
+                disc_info,
+                cfg,
+                sources={"cdtext": True, "musicbrainz": True, "gnudb": True},
+                source_order=["cdtext", "musicbrainz", "gnudb"],
+                callbacks=LookupCallbacks(
+                    on_success=lambda label, count, duration: events.append((label, count, duration))
+                ),
+            )
+
+        self.assertTrue(events)
+        for label, _, duration in events:
+            self.assertGreaterEqual(duration, 0.0, f"duration for {label} should be non-negative")
+
     def test_short_circuit_stops_priority_loop_on_first_match(self) -> None:
         cfg = Config()
         cfg.use_local_cddb_cache = False

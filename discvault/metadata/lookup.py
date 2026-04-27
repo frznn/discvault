@@ -1,6 +1,7 @@
 """Metadata provider orchestrator."""
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -13,8 +14,10 @@ from . import musicbrainz, gnudb, local, discogs, fileimport, urlimport, cdtext
 @dataclass
 class LookupCallbacks:
     on_start: Callable[[str], None] | None = None
-    on_success: Callable[[str, int], None] | None = None
-    on_error: Callable[[str, str], None] | None = None
+    # on_success / on_error receive the provider's wall-clock duration (seconds)
+    # measured around the provider call. Consumers can render or ignore it.
+    on_success: Callable[[str, int, float], None] | None = None
+    on_error: Callable[[str, str, float], None] | None = None
     on_skip: Callable[[str, str], None] | None = None
     on_info: Callable[[str], None] | None = None
 
@@ -73,13 +76,13 @@ def fetch_candidates(
         if callbacks and callbacks.on_start:
             callbacks.on_start(label)
 
-    def _success(label: str, count: int) -> None:
+    def _success(label: str, count: int, duration: float = 0.0) -> None:
         if callbacks and callbacks.on_success:
-            callbacks.on_success(label, count)
+            callbacks.on_success(label, count, duration)
 
-    def _error(label: str, message: str) -> None:
+    def _error(label: str, message: str, duration: float = 0.0) -> None:
         if callbacks and callbacks.on_error:
-            callbacks.on_error(label, message)
+            callbacks.on_error(label, message, duration)
 
     def _skip(label: str, reason: str) -> None:
         if callbacks and callbacks.on_skip:
@@ -91,13 +94,15 @@ def fetch_candidates(
 
     def _run(label: str, func: Callable[[], list[Metadata]]) -> None:
         _start(label)
+        start = time.monotonic()
         try:
             found = func()
         except Exception as exc:
-            _error(label, str(exc))
+            _error(label, str(exc), time.monotonic() - start)
             return
+        duration = time.monotonic() - start
         _add(found)
-        _success(label, len(found))
+        _success(label, len(found), duration)
 
     # 0. Imported metadata file
     if use_file and metadata_file:
@@ -108,6 +113,7 @@ def fetch_candidates(
     if use_url and metadata_url:
         label = "Imported metadata URL"
         _start(label)
+        url_start = time.monotonic()
         try:
             found = urlimport.lookup_url(
                 metadata_url,
@@ -116,12 +122,13 @@ def fetch_candidates(
                 debug=debug,
             )
         except ValueError as exc:
-            _error(label, str(exc))
+            _error(label, str(exc), time.monotonic() - url_start)
         except Exception as exc:
-            _error(label, str(exc))
+            _error(label, str(exc), time.monotonic() - url_start)
         else:
+            url_duration = time.monotonic() - url_start
             _add(found)
-            _success(label, len(found))
+            _success(label, len(found), url_duration)
 
     if manual_search:
         use_discogs = sources.get("discogs", True)

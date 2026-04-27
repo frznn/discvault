@@ -266,6 +266,12 @@ def _extras_notice_text(selected_count: int, available_count: int, *, has_data_s
     return ""
 
 
+def _format_duration(seconds: float) -> str:
+    if seconds < 1.0:
+        return f"{int(round(seconds * 1000))}ms"
+    return f"{seconds:.1f}s"
+
+
 def _normalize_manual_search_text(value: str) -> str:
     stripped = "".join(
         character
@@ -1274,13 +1280,20 @@ class DiscvaultApp(App[None]):
         else:
             self._tlog(f"> Fetching metadata ({', '.join(active)})...")
 
+        log_timings = bool(getattr(cfg, "lookup_log_timings", False))
+
+        def _dur_suffix(seconds: float) -> str:
+            if not log_timings or seconds <= 0:
+                return ""
+            return f" ({_format_duration(seconds)})"
+
         callbacks = meta_lookup.LookupCallbacks(
             on_start=lambda label: self._tlog(f"[dim]  → {label}...[/dim]"),
-            on_success=lambda label, count: self._tlog(
-                f"[dim]  ✓ {label}: {count} result(s)[/dim]"
+            on_success=lambda label, count, duration: self._tlog(
+                f"[dim]  ✓ {label}: {count} result(s){_dur_suffix(duration)}[/dim]"
             ),
-            on_error=lambda label, message: self._tlog(
-                f"[dim]  ✗ {label}: {message}[/dim]"
+            on_error=lambda label, message, duration: self._tlog(
+                f"[dim]  ✗ {label}: {message}{_dur_suffix(duration)}[/dim]"
             ),
             on_skip=lambda label, reason: self._tlog(
                 f"[dim]  · {label}: {reason}[/dim]"
