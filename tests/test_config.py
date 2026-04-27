@@ -99,7 +99,7 @@ class ConfigTests(unittest.TestCase):
             finally:
                 config_mod.CONFIG_PATH = old
 
-        self.assertEqual(cfg.metadata_source_order, ["cdtext", "musicbrainz", "gnudb"])
+        self.assertEqual(cfg.metadata_source_order, ["musicbrainz", "gnudb", "cdtext"])
 
     def test_lookup_log_timings_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

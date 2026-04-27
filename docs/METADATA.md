@@ -16,12 +16,14 @@ DiscVault collects candidates from the providers it runs and deduplicates them. 
 
 Automatic disc lookup is what runs on disc insert, on `F5`, and when you use the TUI `Sources…` dialog.
 
-The automatic lookup runs in this order:
+The automatic lookup runs in this order by default:
 
 1. **Local CDDB cache** - `~/.cddb` directory (always checked first as a free short-circuit when enabled)
-2. **CD-Text** - Metadata embedded on the disc itself
-3. **MusicBrainz** - Via disc ID or TOC fallback
-4. **GnuDB** - Via FreeDB/CDDB disc ID
+2. **MusicBrainz** - Via disc ID or TOC fallback
+3. **GnuDB** - Via FreeDB/CDDB disc ID
+4. **CD-Text** - Metadata embedded on the disc itself
+
+CD-Text is last because reading it shells out to `cdrdao` and falls back to `cd-info`, both of which can take several seconds each on a typical drive (the disc has to be spun up and the TOC re-read), so it is not a good first-choice source. Enable `lookup_log_timings` in the config to see per-provider durations on your own discs and reorder accordingly.
 
 CD-Text, MusicBrainz, and GnuDB are user-editable. Their on/off state and priority can be changed in the TUI `Sources…` dialog: reorder rows with `↑`/`↓` and toggle checkboxes. The dialog has three actions:
 

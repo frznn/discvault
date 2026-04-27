@@ -46,7 +46,7 @@ DEFAULT_CDRDAO_COMMAND = (
 )
 
 METADATA_SOURCE_KEYS: tuple[str, ...] = ("cdtext", "musicbrainz", "gnudb")
-DEFAULT_METADATA_SOURCE_ORDER: list[str] = list(METADATA_SOURCE_KEYS)
+DEFAULT_METADATA_SOURCE_ORDER: list[str] = ["musicbrainz", "gnudb", "cdtext"]
 
 
 @dataclass

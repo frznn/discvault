@@ -15,6 +15,7 @@ The project history starts at `v0.1`.
 
 ### Changed
 
+- The default automatic metadata source order is now `["musicbrainz", "gnudb", "cdtext"]` so the fastest network providers run first and CD-Text — which can take 10+ seconds on a typical drive because it shells out to `cdrdao` and `cd-info` sequentially — runs last. Existing configs with a saved `metadata_source_order` are left untouched.
 - Automatic metadata lookup now stops as soon as the first enabled source returns a result (including the local CDDB cache). Set `lookup_stop_at_first_match = false` in the config to keep the previous behavior of querying every enabled source and merging all candidates.
 - The CLI and TUI metadata flows now share one lookup engine, so automatic lookup and Manual Search follow the same provider rules.
 - Automatic metadata sources are now limited to disc-lookup providers: CD-Text, local CDDB cache, MusicBrainz disc lookup, and GnuDB.
