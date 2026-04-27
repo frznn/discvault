@@ -101,6 +101,40 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.metadata_source_order, ["cdtext", "musicbrainz", "gnudb"])
 
+    def test_manual_search_source_toggles_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config()
+                cfg.manual_src_musicbrainz = False
+                cfg.manual_src_discogs = False
+                cfg.save()
+                loaded = config_mod.Config.load()
+                saved_text = config_path.read_text()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertFalse(loaded.manual_src_musicbrainz)
+        self.assertFalse(loaded.manual_src_discogs)
+        self.assertIn("manual_src_musicbrainz = false", saved_text)
+        self.assertIn("manual_src_discogs = false", saved_text)
+
+    def test_manual_search_source_toggles_default_to_true_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text("[discvault]\n")
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config.load()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertTrue(cfg.manual_src_musicbrainz)
+        self.assertTrue(cfg.manual_src_discogs)
+
     def test_lookup_stop_at_first_match_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"

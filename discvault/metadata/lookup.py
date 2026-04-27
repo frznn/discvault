@@ -124,6 +124,7 @@ def fetch_candidates(
             _success(label, len(found))
 
     if manual_search:
+        use_discogs = sources.get("discogs", True)
         if use_mb:
             if has_manual_terms:
                 _run(
@@ -143,25 +144,28 @@ def fetch_candidates(
         elif not has_manual_terms:
             _skip("MusicBrainz search", "disabled and no search terms")
 
-        if has_manual_terms:
-            if not cfg.discogs.token.strip():
-                _info("Discogs: using anonymous access; a token improves reliability and rate limits")
-            _run(
-                "Discogs",
-                lambda: discogs.lookup(
-                    search_disc_info,
-                    seed_candidates=results,
-                    artist=hint_artist,
-                    album=hint_album,
-                    year=hint_year,
-                    query=manual_query,
-                    token=cfg.discogs.token,
-                    timeout=cfg.metadata_timeout,
-                    debug=debug,
-                ),
-            )
+        if use_discogs:
+            if has_manual_terms:
+                if not cfg.discogs.token.strip():
+                    _info("Discogs: using anonymous access; a token improves reliability and rate limits")
+                _run(
+                    "Discogs",
+                    lambda: discogs.lookup(
+                        search_disc_info,
+                        seed_candidates=results,
+                        artist=hint_artist,
+                        album=hint_album,
+                        year=hint_year,
+                        query=manual_query,
+                        token=cfg.discogs.token,
+                        timeout=cfg.metadata_timeout,
+                        debug=debug,
+                    ),
+                )
+            else:
+                _skip("Discogs", "no search terms")
         else:
-            _skip("Discogs", "no search terms")
+            _skip("Discogs", "disabled in Manual Search")
         return results
 
     short_circuit = bool(getattr(cfg, "lookup_stop_at_first_match", True))

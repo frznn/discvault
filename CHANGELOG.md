@@ -9,6 +9,8 @@ The project history starts at `v0.1`.
 ### Added
 
 - Editable priority list for automatic metadata sources in the TUI `Sources…` dialog: CD-Text, MusicBrainz, and GnuDB can be reordered with `↑`/`↓` buttons, and the chosen order is persisted to `metadata_source_order` in the config file.
+- When automatic metadata lookup returns no candidates, the TUI now offers a confirmation prompt to launch Manual Search directly, so the user does not have to find the button manually after every empty result.
+- Manual Search dialog now exposes per-source toggles for MusicBrainz and Discogs, persisted as `manual_src_musicbrainz` and `manual_src_discogs` so the chosen sources are remembered across runs.
 
 ### Changed
 

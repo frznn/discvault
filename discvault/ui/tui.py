@@ -49,6 +49,7 @@ from .confirm import ConfirmScreen, _copy_to_clipboard
 from .extras_select import ExtrasSelectScreen
 from .folder_picker import FolderPickerScreen
 from .import_prompt import MetadataImportPromptScreen, TextPromptScreen
+from .manual_search import ManualSearchScreen
 from .output_select import OutputSelectScreen
 from .settings import ConfigScreen
 from .source_select import SourceSelectScreen
@@ -1318,6 +1319,7 @@ class DiscvaultApp(App[None]):
             candidates = _sort_manual_search_candidates(candidates, search_text)
 
         self._candidates = candidates
+        offer_manual_search = False
         if candidates:
             self._tlog(
                 f"[green]✓[/green] Found [bold]{len(candidates)}[/bold] metadata candidate(s)."
@@ -1336,11 +1338,16 @@ class DiscvaultApp(App[None]):
                 self._tlog(
                     "[yellow]![/yellow] No metadata found — use Manual Search to query MusicBrainz/Discogs, or enter tags manually."
                 )
+                offer_manual_search = True
             else:
                 self._tlog(
                     "[yellow]![/yellow] No metadata found — try another automatic source selection, or use Manual Search."
                 )
-        self.call_from_thread(self._enter_ready)
+                offer_manual_search = True
+        if offer_manual_search:
+            self.call_from_thread(self._finish_meta_fetch_offer_manual_search)
+        else:
+            self.call_from_thread(self._enter_ready)
 
     @work(thread=True, name="meta")
     def _start_meta_fetch(
@@ -1716,17 +1723,34 @@ class DiscvaultApp(App[None]):
     def _open_manual_search(self) -> None:
         if self.phase == "running" or self._operation_busy:
             return
-        search_text = self._metadata_search_query
         self.push_screen(
-            TextPromptScreen(
-                title="Manual Search",
-                label="Search by artist, album, year, or any words.",
-                value=search_text,
-                placeholder="",
-                submit_label="Search",
+            ManualSearchScreen(
+                value=self._metadata_search_query,
+                musicbrainz=self._cfg.manual_src_musicbrainz,
+                discogs=self._cfg.manual_src_discogs,
             ),
             self._apply_manual_search_prompt,
         )
+
+    def _finish_meta_fetch_offer_manual_search(self) -> None:
+        self._enter_ready()
+        if self.phase == "running" or self._operation_busy:
+            return
+        self.push_screen(
+            ConfirmScreen(
+                title="No metadata found",
+                message=(
+                    "Automatic lookup did not return any candidates. "
+                    "Do you want to run a manual search by text?"
+                ),
+                confirm_label="Manual Search",
+            ),
+            self._on_offer_manual_search_decision,
+        )
+
+    def _on_offer_manual_search_decision(self, choice: bool | None) -> None:
+        if choice:
+            self._open_manual_search()
 
     def _open_output_selector(self) -> None:
         if self.phase == "running" or self._operation_busy:
@@ -1977,13 +2001,28 @@ class DiscvaultApp(App[None]):
             source_order=source_order,
         )
 
-    def _apply_manual_search_prompt(self, value: str | None) -> None:
-        if value is None:
+    def _apply_manual_search_prompt(self, result: dict | None) -> None:
+        if not isinstance(result, dict):
             return
-        self._metadata_search_query = value.strip()
-        self._do_manual_search()
+        query = str(result.get("query", "")).strip()
+        mb = bool(result.get("musicbrainz", self._cfg.manual_src_musicbrainz))
+        discogs = bool(result.get("discogs", self._cfg.manual_src_discogs))
+        self._metadata_search_query = query
+        if (
+            self._cfg.manual_src_musicbrainz != mb
+            or self._cfg.manual_src_discogs != discogs
+        ):
+            self._cfg.manual_src_musicbrainz = mb
+            self._cfg.manual_src_discogs = discogs
+            try:
+                self._cfg.save()
+            except OSError as exc:
+                self._log(
+                    f"[yellow]![/yellow] Could not save Manual Search sources: {exc}"
+                )
+        self._do_manual_search(manual_sources={"musicbrainz": mb, "discogs": discogs})
 
-    def _do_manual_search(self) -> None:
+    def _do_manual_search(self, manual_sources: dict[str, bool] | None = None) -> None:
         if self._operation_busy:
             return
         manual_query, manual_hints = self._manual_search_request()
@@ -1995,6 +2034,13 @@ class DiscvaultApp(App[None]):
         )
         if not search_text:
             self._log("[yellow]![/yellow] Enter search terms or fill in Artist/Album before using Manual Search.")
+            return
+        sources = manual_sources or {
+            "musicbrainz": self._cfg.manual_src_musicbrainz,
+            "discogs": self._cfg.manual_src_discogs,
+        }
+        if not any(sources.values()):
+            self._log("[yellow]![/yellow] No Manual Search sources selected — enable MusicBrainz and/or Discogs and try again.")
             return
         self.phase = "detecting"
         self._operation_busy = True
@@ -2011,7 +2057,7 @@ class DiscvaultApp(App[None]):
         self._refresh_extras_button()
         self._refresh_import_buttons()
         self._start_meta_fetch(
-            self._sources_dict(),
+            sources,
             manual_query=manual_query,
             manual_hints=manual_hints,
             manual_search=True,

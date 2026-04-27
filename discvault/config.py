@@ -64,6 +64,8 @@ class Config:
     default_src_gnudb: bool = False
     metadata_source_order: list[str] = field(default_factory=lambda: list(DEFAULT_METADATA_SOURCE_ORDER))
     lookup_stop_at_first_match: bool = True
+    manual_src_musicbrainz: bool = True
+    manual_src_discogs: bool = True
     use_local_cddb_cache: bool = True
     accuraterip_enabled: bool = False
     download_cover_art: bool = True
@@ -141,6 +143,14 @@ class Config:
             dv.get("lookup_stop_at_first_match"),
             cfg.lookup_stop_at_first_match,
         )
+        cfg.manual_src_musicbrainz = _as_bool(
+            dv.get("manual_src_musicbrainz"),
+            cfg.manual_src_musicbrainz,
+        )
+        cfg.manual_src_discogs = _as_bool(
+            dv.get("manual_src_discogs"),
+            cfg.manual_src_discogs,
+        )
         cfg.use_local_cddb_cache = _as_bool(
             dv.get("use_local_cddb_cache", cfg.use_local_cddb_cache),
             cfg.use_local_cddb_cache,
@@ -199,6 +209,8 @@ class Config:
             f"default_src_gnudb = {str(self.default_src_gnudb).lower()}",
             f"metadata_source_order = {_toml_string_array(self.metadata_source_order)}",
             f"lookup_stop_at_first_match = {str(self.lookup_stop_at_first_match).lower()}",
+            f"manual_src_musicbrainz = {str(self.manual_src_musicbrainz).lower()}",
+            f"manual_src_discogs = {str(self.manual_src_discogs).lower()}",
             f"use_local_cddb_cache = {str(self.use_local_cddb_cache).lower()}",
             f"accuraterip_enabled = {str(self.accuraterip_enabled).lower()}",
             f"download_cover_art = {str(self.download_cover_art).lower()}",

@@ -125,6 +125,47 @@ class LookupTests(unittest.TestCase):
         self.assertEqual(events, ["MusicBrainz", "CD-Text", "GnuDB HTTP"])
 
 
+    def test_manual_search_skips_discogs_when_toggle_off(self) -> None:
+        cfg = Config()
+        disc_info = DiscInfo(device="/dev/cdrom", track_count=8, mb_disc_id="disc-id")
+        skips: list[tuple[str, str]] = []
+
+        with patch("discvault.metadata.musicbrainz.lookup", return_value=[]), \
+            patch("discvault.metadata.musicbrainz.search_releases", return_value=[]) as search_releases, \
+            patch("discvault.metadata.discogs.lookup", return_value=[]) as discogs_lookup:
+            fetch_candidates(
+                disc_info,
+                cfg,
+                sources={"musicbrainz": True, "discogs": False},
+                manual_query="Artist Album",
+                manual_hints=("Artist", "Album", ""),
+                manual_search=True,
+                callbacks=LookupCallbacks(on_skip=lambda label, reason: skips.append((label, reason))),
+            )
+
+        search_releases.assert_called_once()
+        discogs_lookup.assert_not_called()
+        self.assertIn(("Discogs", "disabled in Manual Search"), skips)
+
+    def test_manual_search_skips_musicbrainz_when_toggle_off(self) -> None:
+        cfg = Config()
+        disc_info = DiscInfo(device="/dev/cdrom", track_count=8, mb_disc_id="disc-id")
+
+        with patch("discvault.metadata.musicbrainz.lookup", return_value=[]), \
+            patch("discvault.metadata.musicbrainz.search_releases", return_value=[]) as search_releases, \
+            patch("discvault.metadata.discogs.lookup", return_value=[]) as discogs_lookup:
+            fetch_candidates(
+                disc_info,
+                cfg,
+                sources={"musicbrainz": False, "discogs": True},
+                manual_query="Artist Album",
+                manual_hints=("Artist", "Album", ""),
+                manual_search=True,
+            )
+
+        search_releases.assert_not_called()
+        discogs_lookup.assert_called_once()
+
     def test_short_circuit_stops_priority_loop_on_first_match(self) -> None:
         cfg = Config()
         cfg.use_local_cddb_cache = False

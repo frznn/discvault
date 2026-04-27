@@ -33,6 +33,8 @@ The Local CDDB cache is not reorderable — it stays anchored before the online 
 
 By default, automatic lookup **stops as soon as one source returns a result** (including the local cache). This matches the way the priority list is normally used: the first source you trust most fires first, returns metadata, and the rest of the providers are skipped. Set `lookup_stop_at_first_match = false` in the config file to fall back to the old behavior of querying every enabled source and merging all candidates.
 
+When automatic lookup returns no candidates, the TUI offers to launch Manual Search via a confirmation prompt — a one-click path to a text-based MusicBrainz/Discogs query.
+
 Only these automatic sources appear in the config defaults and the TUI source picker.
 
 ## Manual Search
@@ -43,6 +45,8 @@ Manual Search is separate from automatic lookup.
 - **Discogs** - Text search seeded from your explicit search terms and any MusicBrainz search matches
 
 Discogs is manual-search-only. It is not part of normal automatic metadata lookup and does not appear in the automatic source list.
+
+The TUI Manual Search dialog lets you toggle MusicBrainz and Discogs independently of the automatic source toggles. The chosen state is persisted as `manual_src_musicbrainz` and `manual_src_discogs` in the config file and reused on subsequent searches.
 
 If you leave the Manual Search prompt empty, DiscVault falls back to the current Artist/Album/Year fields as the search text.
 
