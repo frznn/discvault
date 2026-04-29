@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 import shutil
 import subprocess
+import time
 import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -497,6 +498,7 @@ class DiscvaultApp(App[None]):
         from ..cleanup import Cleanup
         self._cleanup = Cleanup()
         self._status_log_history: list[str] = []
+        self._log_file_initialized = False
 
     # ------------------------------------------------------------------
     # Layout
@@ -653,9 +655,29 @@ class DiscvaultApp(App[None]):
 
     def _log(self, msg: str) -> None:
         self._status_log_history.append(msg)
+        if self._cfg.log_to_file:
+            self._append_log_to_file(msg)
         log = self.query_one("#status-log", RichLog)
         log.write(msg)
         log.scroll_end(animate=False)
+
+    def _append_log_to_file(self, msg: str) -> None:
+        from ..config import LOG_FILE_PATH
+
+        try:
+            if not self._log_file_initialized:
+                LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+                    f.write(
+                        f"\n=== DiscVault session {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n"
+                    )
+                self._log_file_initialized = True
+            with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+                f.write(_strip_log_markup(msg) + "\n")
+        except OSError:
+            # Don't break the UI if the log file is unwritable; just stop trying
+            # for this session.
+            self._log_file_initialized = True
 
     def _tlog(self, msg: str) -> None:
         """Thread-safe log."""

@@ -24,6 +24,7 @@ _DEFAULT_BASE_DIR = str(Path.home() / "Music" / "Library")
 # systemd-tmpfiles cleanup, and to keep work files per-user.
 _DEFAULT_WORK_DIR = str(Path.home() / ".cache" / "discvault" / "work")
 CONFIG_PATH = Path.home() / ".config" / "discvault" / "config.toml"
+LOG_FILE_PATH = Path.home() / ".cache" / "discvault" / "last-run.log"
 
 
 @dataclass
@@ -65,6 +66,7 @@ class Config:
     metadata_source_order: list[str] = field(default_factory=lambda: list(DEFAULT_METADATA_SOURCE_ORDER))
     lookup_stop_at_first_match: bool = True
     lookup_log_timings: bool = False
+    log_to_file: bool = False
     manual_src_musicbrainz: bool = True
     manual_src_discogs: bool = True
     use_local_cddb_cache: bool = True
@@ -148,6 +150,10 @@ class Config:
             dv.get("lookup_log_timings"),
             cfg.lookup_log_timings,
         )
+        cfg.log_to_file = _as_bool(
+            dv.get("log_to_file"),
+            cfg.log_to_file,
+        )
         cfg.manual_src_musicbrainz = _as_bool(
             dv.get("manual_src_musicbrainz"),
             cfg.manual_src_musicbrainz,
@@ -215,6 +221,7 @@ class Config:
             f"metadata_source_order = {_toml_string_array(self.metadata_source_order)}",
             f"lookup_stop_at_first_match = {str(self.lookup_stop_at_first_match).lower()}",
             f"lookup_log_timings = {str(self.lookup_log_timings).lower()}",
+            f"log_to_file = {str(self.log_to_file).lower()}",
             f"manual_src_musicbrainz = {str(self.manual_src_musicbrainz).lower()}",
             f"manual_src_discogs = {str(self.manual_src_discogs).lower()}",
             f"use_local_cddb_cache = {str(self.use_local_cddb_cache).lower()}",

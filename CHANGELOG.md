@@ -13,6 +13,7 @@ The project history starts at `v0.1`.
 - Manual Search dialog now exposes per-source toggles for MusicBrainz and Discogs, persisted as `manual_src_musicbrainz` and `manual_src_discogs` so the chosen sources are remembered across runs.
 - Optional per-provider duration logging in the TUI metadata trace, controlled by a new `lookup_log_timings` config flag and a "Log lookup durations" checkbox in the Settings popup. When enabled, success and error lines are suffixed with `(123ms)` / `(1.2s)` so the user can see which sources are slow and reorder priority accordingly.
 - "Copy log" button in the TUI action bar copies the entire status log (markup stripped) to the system clipboard, so the trace can be shared without manual selection.
+- Optional file logging for the TUI status log, controlled by a `log_to_file` config flag and a "Write logs to file" checkbox in the Settings popup. When enabled, every line written to the status log is also appended to `~/.cache/discvault/last-run.log` (markup stripped) with a timestamped header per session, useful when the clipboard route is unavailable.
 
 ### Changed
 

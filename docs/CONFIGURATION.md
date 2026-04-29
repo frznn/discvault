@@ -32,6 +32,7 @@ default_src_gnudb = false
 metadata_source_order = ["musicbrainz", "gnudb", "cdtext"]
 lookup_stop_at_first_match = true
 lookup_log_timings = false
+log_to_file = false
 manual_src_musicbrainz = true
 manual_src_discogs = true
 use_local_cddb_cache = true
@@ -96,6 +97,7 @@ token = ""
 | `metadata_source_order` | Priority order for CD-Text / MusicBrainz / GnuDB during automatic lookup. Edited via the TUI `Sources…` dialog. |
 | `lookup_stop_at_first_match` | Stop automatic lookup as soon as one source returns metadata (default `true`). Set to `false` to query every enabled source and merge all candidates. |
 | `lookup_log_timings` | Append the per-provider duration to the TUI metadata trace (default `false`). Useful for diagnosing slow sources or deciding the priority order. |
+| `log_to_file` | Append the TUI status log to `~/.cache/discvault/last-run.log` as it is written (default `false`). Each session is delimited by a timestamped header. |
 | `manual_src_musicbrainz` | Default state of the MusicBrainz checkbox in the Manual Search dialog (default `true`). |
 | `manual_src_discogs` | Default state of the Discogs checkbox in the Manual Search dialog (default `true`). |
 | `use_local_cddb_cache` | Check `~/.cddb` before online lookup |

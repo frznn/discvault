@@ -406,6 +406,45 @@ class TuiHelpersTests(unittest.TestCase):
         cb.assert_not_called()
         announce.assert_called_once_with("Log is empty — nothing to copy.", severity="warning")
 
+    def test_append_log_to_file_writes_session_header_and_lines(self) -> None:
+        cfg = Config()
+        cfg.log_to_file = True
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "last-run.log"
+            with patch("discvault.config.LOG_FILE_PATH", log_path):
+                app._append_log_to_file("[green]✓[/green] Detected device")
+                app._append_log_to_file("[dim]  → MusicBrainz...[/dim]")
+
+            text = log_path.read_text(encoding="utf-8")
+
+        self.assertIn("=== DiscVault session", text)
+        self.assertIn("✓ Detected device", text)
+        self.assertIn("→ MusicBrainz...", text)
+        self.assertNotIn("[green]", text)
+        self.assertNotIn("[dim]", text)
+
     def test_do_copy_log_warns_when_clipboard_unavailable(self) -> None:
         cfg = Config()
         args = Namespace(

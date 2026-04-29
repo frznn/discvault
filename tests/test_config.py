@@ -101,6 +101,36 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.metadata_source_order, ["musicbrainz", "gnudb", "cdtext"])
 
+    def test_log_to_file_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config()
+                cfg.log_to_file = True
+                cfg.save()
+                loaded = config_mod.Config.load()
+                saved_text = config_path.read_text()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertTrue(loaded.log_to_file)
+        self.assertIn("log_to_file = true", saved_text)
+
+    def test_log_to_file_defaults_to_false_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text("[discvault]\n")
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config.load()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertFalse(cfg.log_to_file)
+
     def test_lookup_log_timings_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"

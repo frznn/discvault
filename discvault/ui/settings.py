@@ -146,6 +146,13 @@ class ConfigScreen(ModalScreen[Config | None]):
                 ),
             ),
             self._check_row(
+                (
+                    "Write logs to file",
+                    "cfg-log-to-file",
+                    self._cfg.log_to_file,
+                ),
+            ),
+            self._check_row(
                 ("Use local CDDB cache", "cfg-cache", self._cfg.use_local_cddb_cache),
                 ("Enable AccurateRip", "cfg-accuraterip", self._cfg.accuraterip_enabled),
             ),
@@ -258,6 +265,7 @@ class ConfigScreen(ModalScreen[Config | None]):
         cfg.default_src_gnudb = self._check("cfg-src-gnudb")
         cfg.lookup_stop_at_first_match = self._check("cfg-stop-first-match")
         cfg.lookup_log_timings = self._check("cfg-log-timings")
+        cfg.log_to_file = self._check("cfg-log-to-file")
         completion_sound = self.query_one("#cfg-completion-sound", Select).value
         if completion_sound in {"bell", "chime", "both", "off"}:
             cfg.completion_sound = completion_sound
