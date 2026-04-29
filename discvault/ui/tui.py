@@ -266,6 +266,19 @@ def _extras_notice_text(selected_count: int, available_count: int, *, has_data_s
     return ""
 
 
+def _strip_log_markup(line: str) -> str:
+    """Render Rich markup in a log line as plain text, falling back to the raw
+    string when the markup is malformed (e.g. a user-supplied substring such as
+    a track title containing "[/...]" patterns)."""
+    from rich.markup import MarkupError
+    from rich.text import Text
+
+    try:
+        return Text.from_markup(line).plain
+    except MarkupError:
+        return line
+
+
 def _format_duration(seconds: float) -> str:
     if seconds < 1.0:
         return f"{int(round(seconds * 1000))}ms"
@@ -483,6 +496,7 @@ class DiscvaultApp(App[None]):
         self._auto_import_url_pending = bool(self._metadata_url)
         from ..cleanup import Cleanup
         self._cleanup = Cleanup()
+        self._status_log_history: list[str] = []
 
     # ------------------------------------------------------------------
     # Layout
@@ -599,6 +613,7 @@ class DiscvaultApp(App[None]):
             # Action bar — inside #outer, always visible below the scroll area
             with Horizontal(id="action-bar"):
                 yield Button("Settings", id="btn-config")
+                yield Button("Copy log", id="btn-copy-log")
                 yield Button("Select Outputs", id="btn-outputs")
                 yield Button("Extras", id="btn-extras", disabled=True)
                 with Horizontal(id="action-right"):
@@ -637,6 +652,7 @@ class DiscvaultApp(App[None]):
     # ------------------------------------------------------------------
 
     def _log(self, msg: str) -> None:
+        self._status_log_history.append(msg)
         log = self.query_one("#status-log", RichLog)
         log.write(msg)
         log.scroll_end(animate=False)
@@ -1670,6 +1686,8 @@ class DiscvaultApp(App[None]):
         bid = event.button.id
         if bid == "btn-config":
             self._open_settings()
+        elif bid == "btn-copy-log":
+            self._do_copy_log()
         elif bid == "btn-more":
             self._open_manual_search()
         elif bid == "btn-sources":
@@ -1720,6 +1738,20 @@ class DiscvaultApp(App[None]):
         if self.phase == "running" or self._operation_busy:
             return
         self.push_screen(ConfigScreen(self._cfg), self._apply_settings)
+
+    def _do_copy_log(self) -> None:
+        if not self._status_log_history:
+            self._announce("Log is empty — nothing to copy.", severity="warning")
+            return
+        plain_lines = [_strip_log_markup(line) for line in self._status_log_history]
+        text = "\n".join(plain_lines)
+        if _copy_to_clipboard(text):
+            self._announce("Log copied to clipboard.", severity="success")
+        else:
+            self._announce(
+                "Clipboard unavailable (install wl-copy or xclip).",
+                severity="warning",
+            )
 
     def _open_metadata_search(self) -> None:
         if self.phase == "running" or self._operation_busy:

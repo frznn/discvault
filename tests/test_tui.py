@@ -288,6 +288,157 @@ class TuiHelpersTests(unittest.TestCase):
             app._announce("Nope", severity="error")
             show.assert_called_once_with("Nope", severity="error")
 
+    def test_do_copy_log_strips_markup_and_calls_clipboard(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._status_log_history = [
+            "[green]✓[/green] Detected device",
+            "[dim]  → MusicBrainz...[/dim]",
+            "[dim]  ✓ MusicBrainz: 3 result(s)[/dim]",
+        ]
+
+        with patch("discvault.ui.tui._copy_to_clipboard", return_value=True) as cb, \
+            patch.object(app, "_announce") as announce:
+            app._do_copy_log()
+
+        cb.assert_called_once()
+        copied_text = cb.call_args.args[0]
+        # Markup stripped, but the visible glyphs preserved.
+        self.assertIn("✓ Detected device", copied_text)
+        self.assertIn("→ MusicBrainz...", copied_text)
+        self.assertIn("✓ MusicBrainz: 3 result(s)", copied_text)
+        self.assertNotIn("[green]", copied_text)
+        self.assertNotIn("[dim]", copied_text)
+        announce.assert_called_once_with("Log copied to clipboard.", severity="success")
+
+    def test_do_copy_log_keeps_lines_with_malformed_markup(self) -> None:
+        # Rich's markup parser raises MarkupError on stray closing tags such as
+        # the ones that can appear when user-supplied text (e.g. a track
+        # title) is interpolated into a log line. The button must not crash
+        # in that case — it falls back to the raw line.
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._status_log_history = [
+            "[green]✓[/green] Detected device",
+            "> Search terms: [bold]Foo [/Bar][/bold]",  # malformed: stray [/Bar]
+        ]
+
+        with patch("discvault.ui.tui._copy_to_clipboard", return_value=True) as cb, \
+            patch.object(app, "_announce") as announce:
+            app._do_copy_log()
+
+        cb.assert_called_once()
+        copied_text = cb.call_args.args[0]
+        self.assertIn("✓ Detected device", copied_text)
+        # The malformed line is preserved as-is rather than stripped.
+        self.assertIn("[/Bar]", copied_text)
+        announce.assert_called_once_with("Log copied to clipboard.", severity="success")
+
+    def test_do_copy_log_warns_when_history_empty(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._status_log_history = []
+
+        with patch("discvault.ui.tui._copy_to_clipboard") as cb, \
+            patch.object(app, "_announce") as announce:
+            app._do_copy_log()
+
+        cb.assert_not_called()
+        announce.assert_called_once_with("Log is empty — nothing to copy.", severity="warning")
+
+    def test_do_copy_log_warns_when_clipboard_unavailable(self) -> None:
+        cfg = Config()
+        args = Namespace(
+            tracks=None,
+            metadata_file=None,
+            metadata_url=None,
+            mp3_bitrate=320,
+            mp3_quality=2,
+            flac_compression=8,
+            no_image=False,
+            no_flac=False,
+            no_mp3=False,
+            ogg=False,
+            opus=False,
+            alac=False,
+            aac=False,
+            wav=False,
+            iso=False,
+            artist=None,
+            album=None,
+            year=None,
+        )
+        app = DiscvaultApp(args, cfg)
+        app._status_log_history = ["line"]
+
+        with patch("discvault.ui.tui._copy_to_clipboard", return_value=False), \
+            patch.object(app, "_announce") as announce:
+            app._do_copy_log()
+
+        announce.assert_called_once()
+        message, _ = announce.call_args.args, announce.call_args.kwargs
+        self.assertIn("Clipboard unavailable", message[0])
+
     def test_extras_announcement_waits_until_ready(self) -> None:
         cfg = Config()
         args = Namespace(

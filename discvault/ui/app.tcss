@@ -291,6 +291,7 @@ Button {
 }
 
 #btn-config      { min-width: 12; }
+#btn-copy-log    { min-width: 12; margin-left: 1; }
 #btn-target      { width: auto; min-width: 0; margin-left: 0; }
 #btn-outputs     { min-width: 15; margin-left: 1; }
 #btn-extras      { min-width: 0; width: auto; margin-left: 1; }

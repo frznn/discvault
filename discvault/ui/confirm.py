@@ -11,30 +11,44 @@ from textual.widgets import Button, Label, Static, TextArea
 
 
 def _copy_to_clipboard(text: str) -> bool:
-    """Try to copy text to clipboard using available system tools. Returns True on success."""
-    # Wayland
-    if shutil.which("wl-copy"):
+    """Try to copy text to clipboard using available system tools. Returns True on success.
+
+    stdout and stderr from the helper tool are suppressed; otherwise tools like
+    `wl-copy` (when no Wayland session is reachable) print diagnostics that
+    would leak into the TUI screen as "weird warning text".
+    """
+
+    def _run(cmd: list[str]) -> bool:
         try:
-            subprocess.run(["wl-copy"], input=text, text=True, check=True, timeout=3)
+            subprocess.run(
+                cmd,
+                input=text,
+                text=True,
+                check=True,
+                timeout=3,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             return True
         except Exception:
-            pass
+            return False
+
+    # Wayland
+    if shutil.which("wl-copy") and _run(["wl-copy"]):
+        return True
     # X11
     for tool in ("xclip", "xsel"):
         if shutil.which(tool):
-            try:
-                args = [tool, "-selection", "clipboard", "-i"] if tool == "xclip" else [tool, "--clipboard", "--input"]
-                subprocess.run(args, input=text, text=True, check=True, timeout=3)
+            args = (
+                [tool, "-selection", "clipboard", "-i"]
+                if tool == "xclip"
+                else [tool, "--clipboard", "--input"]
+            )
+            if _run(args):
                 return True
-            except Exception:
-                pass
     # macOS
-    if shutil.which("pbcopy"):
-        try:
-            subprocess.run(["pbcopy"], input=text, text=True, check=True, timeout=3)
-            return True
-        except Exception:
-            pass
+    if shutil.which("pbcopy") and _run(["pbcopy"]):
+        return True
     return False
 
 
