@@ -117,10 +117,6 @@ def _parse_cue(text: str, *, source: str) -> Metadata | None:
     if not album_artist and not album and not tracks:
         return None
 
-    for track in tracks:
-        if track.artist == album_artist:
-            track.artist = ""
-
     return Metadata(
         source=f"Imported ({source})",
         album_artist=album_artist,

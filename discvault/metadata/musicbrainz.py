@@ -286,8 +286,6 @@ def _metadata_from_release_medium(
             continue
         title = trim(t.get("title", ""))
         artist = trim(_ac_name(t.get("artist-credit")))
-        if artist == album_artist:
-            artist = ""
         tracks.append(Track(number=num, title=title, artist=artist))
 
     if not album_artist and not album and not tracks:

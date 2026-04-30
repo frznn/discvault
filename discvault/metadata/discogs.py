@@ -385,7 +385,7 @@ def _fetch_release(
     year_raw = str(data.get("year", "")).strip()
     year = year_raw if year_raw.isdigit() and len(year_raw) == 4 else ""
 
-    tracks = _parse_tracklist(data.get("tracklist", []), fallback_artist=album_artist)
+    tracks = _parse_tracklist(data.get("tracklist", []))
     if disc_info.track_count and tracks:
         audio_track_count = len(disc_info.audio_track_numbers) or disc_info.track_count
         if not allow_inexact_track_count and len(tracks) not in {disc_info.track_count, audio_track_count}:
@@ -415,7 +415,7 @@ def _fetch_release(
     )
 
 
-def _parse_tracklist(tracklist: list[dict], *, fallback_artist: str) -> list[Track]:
+def _parse_tracklist(tracklist: list[dict]) -> list[Track]:
     tracks: list[Track] = []
     position = 0
     for entry in tracklist:
@@ -426,7 +426,5 @@ def _parse_tracklist(tracklist: list[dict], *, fallback_artist: str) -> list[Tra
             continue
         position += 1
         artist = trim(", ".join(artist.get("name", "") for artist in entry.get("artists", [])))
-        if artist == fallback_artist:
-            artist = ""
         tracks.append(Track(number=position, title=title, artist=artist))
     return tracks

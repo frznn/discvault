@@ -151,6 +151,11 @@ class ConfigScreen(ModalScreen[Config | None]):
                     "cfg-log-to-file",
                     self._cfg.log_to_file,
                 ),
+                (
+                    "Blank redundant track artists",
+                    "cfg-blank-redundant-artists",
+                    self._cfg.blank_redundant_track_artist,
+                ),
             ),
             self._check_row(
                 ("Use local CDDB cache", "cfg-cache", self._cfg.use_local_cddb_cache),
@@ -266,6 +271,7 @@ class ConfigScreen(ModalScreen[Config | None]):
         cfg.lookup_stop_at_first_match = self._check("cfg-stop-first-match")
         cfg.lookup_log_timings = self._check("cfg-log-timings")
         cfg.log_to_file = self._check("cfg-log-to-file")
+        cfg.blank_redundant_track_artist = self._check("cfg-blank-redundant-artists")
         completion_sound = self.query_one("#cfg-completion-sound", Select).value
         if completion_sound in {"bell", "chime", "both", "off"}:
             cfg.completion_sound = completion_sound

@@ -4,8 +4,12 @@ import unittest
 from unittest.mock import patch
 
 from discvault.config import Config
-from discvault.metadata.lookup import LookupCallbacks, fetch_candidates
-from discvault.metadata.types import DiscInfo, Metadata
+from discvault.metadata.lookup import (
+    LookupCallbacks,
+    _blank_redundant_track_artists,
+    fetch_candidates,
+)
+from discvault.metadata.types import DiscInfo, Metadata, Track
 
 
 class LookupTests(unittest.TestCase):
@@ -342,6 +346,95 @@ class LookupTests(unittest.TestCase):
 
         self.assertEqual(events, ["GnuDB HTTP"])
         cddbp.assert_not_called()
+
+
+class BlankRedundantTrackArtistsTests(unittest.TestCase):
+    def _meta(self, album_artist: str, *track_artists: str) -> Metadata:
+        return Metadata(
+            source="Test",
+            album_artist=album_artist,
+            album="Album",
+            tracks=[
+                Track(number=i + 1, title=f"T{i+1}", artist=a)
+                for i, a in enumerate(track_artists)
+            ],
+        )
+
+    def test_single_artist_disc_is_blanked(self) -> None:
+        meta = self._meta("Artist", "Artist", "Artist", "Artist")
+        _blank_redundant_track_artists(meta)
+        self.assertEqual([t.artist for t in meta.tracks], ["", "", ""])
+
+    def test_empty_per_track_artist_counts_as_matching(self) -> None:
+        meta = self._meta("Artist", "Artist", "", "Artist")
+        _blank_redundant_track_artists(meta)
+        self.assertEqual([t.artist for t in meta.tracks], ["", "", ""])
+
+    def test_compilation_is_left_untouched(self) -> None:
+        meta = self._meta("Various Artists", "Beatles", "Stones", "Beatles")
+        before = [t.artist for t in meta.tracks]
+        _blank_redundant_track_artists(meta)
+        self.assertEqual([t.artist for t in meta.tracks], before)
+
+    def test_one_differing_track_keeps_all(self) -> None:
+        meta = self._meta("Artist", "Artist", "Artist", "Guest")
+        before = [t.artist for t in meta.tracks]
+        _blank_redundant_track_artists(meta)
+        self.assertEqual([t.artist for t in meta.tracks], before)
+
+    def test_empty_album_artist_is_noop(self) -> None:
+        meta = self._meta("", "Artist", "Artist")
+        _blank_redundant_track_artists(meta)
+        self.assertEqual([t.artist for t in meta.tracks], ["Artist", "Artist"])
+
+
+class BlankRedundantTrackArtistsConfigTests(unittest.TestCase):
+    def _make_cfg(self, *, toggle: bool) -> Config:
+        cfg = Config()
+        cfg.blank_redundant_track_artist = toggle
+        return cfg
+
+    def _disc_info(self) -> DiscInfo:
+        return DiscInfo(device="/dev/cdrom", track_count=2, mb_disc_id="disc-id")
+
+    def _seeded_meta(self) -> Metadata:
+        return Metadata(
+            source="MusicBrainz",
+            album_artist="Artist",
+            album="Album",
+            tracks=[
+                Track(number=1, title="One", artist="Artist"),
+                Track(number=2, title="Two", artist="Artist"),
+            ],
+        )
+
+    def test_fetch_candidates_blanks_when_toggle_on(self) -> None:
+        cfg = self._make_cfg(toggle=True)
+        with patch(
+            "discvault.metadata.musicbrainz.lookup",
+            return_value=[self._seeded_meta()],
+        ):
+            results = fetch_candidates(
+                self._disc_info(),
+                cfg,
+                sources={"cdtext": False, "musicbrainz": True, "gnudb": False},
+            )
+        self.assertEqual(len(results), 1)
+        self.assertEqual([t.artist for t in results[0].tracks], ["", ""])
+
+    def test_fetch_candidates_preserves_when_toggle_off(self) -> None:
+        cfg = self._make_cfg(toggle=False)
+        with patch(
+            "discvault.metadata.musicbrainz.lookup",
+            return_value=[self._seeded_meta()],
+        ):
+            results = fetch_candidates(
+                self._disc_info(),
+                cfg,
+                sources={"cdtext": False, "musicbrainz": True, "gnudb": False},
+            )
+        self.assertEqual(len(results), 1)
+        self.assertEqual([t.artist for t in results[0].tracks], ["Artist", "Artist"])
 
 
 if __name__ == "__main__":

@@ -258,7 +258,28 @@ def fetch_candidates(
         if short_circuit and len(results) > before:
             break
 
+    if cfg.blank_redundant_track_artist:
+        for meta in results:
+            _blank_redundant_track_artists(meta)
+
     return results
+
+
+def _blank_redundant_track_artists(meta: Metadata) -> None:
+    """Blank per-track Artist on a single-artist disc.
+
+    A track artist that is empty already counts as "matches album artist" —
+    sources commonly leave it empty when the track artist is the same as the
+    album artist, and one stray empty cell shouldn't defeat the rule.
+    """
+    if not meta.tracks or not meta.album_artist:
+        return
+    album_artist = meta.album_artist
+    for track in meta.tracks:
+        if track.artist and track.artist != album_artist:
+            return
+    for track in meta.tracks:
+        track.artist = ""
 
 
 def _resolve_source_order(

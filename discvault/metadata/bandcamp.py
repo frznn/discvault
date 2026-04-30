@@ -145,10 +145,7 @@ def _parse_json_ld_parts(html: str) -> dict:
             album = trim(str(item.get("name") or ""))
             year = _extract_year(str(item.get("datePublished") or item.get("dateCreated") or ""))
             cover_art_url = _extract_url(item.get("image"))
-            tracks = _parse_schema_tracks(
-                item.get("track"),
-                fallback_artist=album_artist,
-            )
+            tracks = _parse_schema_tracks(item.get("track"))
             return {
                 "album_artist": album_artist,
                 "album": album,
@@ -186,7 +183,7 @@ def _lower_types(item: dict) -> set[str]:
     return set()
 
 
-def _parse_schema_tracks(raw_tracks: object, *, fallback_artist: str) -> list[Track]:
+def _parse_schema_tracks(raw_tracks: object) -> list[Track]:
     if isinstance(raw_tracks, dict) and isinstance(raw_tracks.get("itemListElement"), list):
         raw_tracks = raw_tracks["itemListElement"]
     if not isinstance(raw_tracks, list):
@@ -205,8 +202,6 @@ def _parse_schema_tracks(raw_tracks: object, *, fallback_artist: str) -> list[Tr
             continue
         position = _as_int(entry.get("position"), item_position)
         artist = _extract_name(entry.get("byArtist") or entry.get("author"))
-        if artist == fallback_artist:
-            artist = ""
         tracks.append(Track(number=position, title=title, artist=artist))
     return tracks
 
@@ -250,8 +245,6 @@ def _parse_tralbum_parts(html: str) -> dict:
             if not title:
                 continue
             artist = trim(str(item.get("artist") or ""))
-            if artist == album_artist:
-                artist = ""
             tracks.append(
                 Track(
                     number=_as_int(item.get("track_num"), index),
