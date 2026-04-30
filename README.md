@@ -88,4 +88,4 @@ DiscVault is built around Linux CD tooling (`/dev/cdrom`, `/dev/sr0`). Some help
 
 ## Version
 
-Current version: `0.3.0`
+Current version: `0.4.0`
