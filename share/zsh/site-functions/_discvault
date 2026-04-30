@@ -11,8 +11,8 @@ _discvault() {
   "--work-dir[Temporary work directory (overrides config)]:dir:_files -/" \
   "--tracks[Track selection, e.g. 1-10 or 1,2,4-9]:spec:" \
   "--metadata-file[Import metadata from a .cue, .toc, .json, or .toml file]:file:_files" \
-  "--metadata-url[Import metadata from a supported page URL (currently Bandcamp albums)]:url:" \
-  "--bandcamp-url[Import metadata from a supported page URL (currently Bandcamp albums)]:url:" \
+  "--metadata-url[Import metadata from a supported page URL (Bandcamp albums or Discogs releases)]:url:" \
+  "--bandcamp-url[Import metadata from a supported page URL (Bandcamp albums or Discogs releases)]:url:" \
   "--artist[Artist name (overrides metadata lookup)]:name:" \
   "--album[Album name (overrides metadata lookup)]:name:" \
   "--year[Album year (overrides metadata lookup)]:yyyy:" \

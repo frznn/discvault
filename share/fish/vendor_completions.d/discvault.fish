@@ -5,7 +5,7 @@ complete -c discvault -s o -l base-dir -r -d "Library base directory (overrides 
 complete -c discvault -l work-dir -r -d "Temporary work directory (overrides config)"
 complete -c discvault -l tracks -r -d "Track selection, e.g. 1-10 or 1,2,4-9"
 complete -c discvault -l metadata-file -r -d "Import metadata from a .cue, .toc, .json, or .toml file"
-complete -c discvault -l metadata-url -l bandcamp-url -r -d "Import metadata from a supported page URL (currently Bandcamp albums)"
+complete -c discvault -l metadata-url -l bandcamp-url -r -d "Import metadata from a supported page URL (Bandcamp albums or Discogs releases)"
 complete -c discvault -l artist -r -d "Artist name (overrides metadata lookup)"
 complete -c discvault -l album -r -d "Album name (overrides metadata lookup)"
 complete -c discvault -l year -r -d "Album year (overrides metadata lookup)"
