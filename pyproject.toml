@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "discvault"
-version = "0.3.0"
+version = "0.4.0"
 description = "CD archiver — disc image backup, audio rip, FLAC + MP3 encode, metadata lookup"
 readme = "README.md"
 license = "MIT"

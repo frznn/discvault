@@ -6,6 +6,8 @@ The project history starts at `v0.1`.
 
 ## [Unreleased]
 
+## [0.4] - 2026-04-30
+
 ### Added
 
 - Editable priority list for automatic metadata sources in the TUI `Sources…` dialog: CD-Text, MusicBrainz, and GnuDB can be reordered with `↑`/`↓` buttons, and the chosen order is persisted to `metadata_source_order` in the config file.
@@ -14,6 +16,10 @@ The project history starts at `v0.1`.
 - Optional per-provider duration logging in the TUI metadata trace, controlled by a new `lookup_log_timings` config flag and a "Log lookup durations" checkbox in the Settings popup. When enabled, success and error lines are suffixed with `(123ms)` / `(1.2s)` so the user can see which sources are slow and reorder priority accordingly.
 - "Copy log" button in the TUI action bar copies the entire status log (markup stripped) to the system clipboard, so the trace can be shared without manual selection.
 - Optional file logging for the TUI status log, controlled by a `log_to_file` config flag and a "Write logs to file" checkbox in the Settings popup. When enabled, every line written to the status log is also appended to `~/.cache/discvault/last-run.log` (markup stripped) with a timestamped header per session, useful when the clipboard route is unavailable.
+- Discogs URLs are now supported in the TUI Import popup, including master URLs that resolve to the curator-canonical `main_release` so the user does not have to find a specific pressing first. Bandcamp URLs continue to work alongside.
+- Discogs automatic search now prepends a master-resolved release at the top of candidates when one matches the seeded artist/album, surfacing canonical pressings ahead of one-off variants.
+- The Import popup now lists supported file types (`.cue`, `.toc`, `.json`, `.toml`) and URL sites (Bandcamp, Discogs) in a mode-aware help line that updates as File or URL is toggled.
+- New `Blank redundant track artists` Settings toggle (default on) for source-agnostic blanking of the per-track Artist field on single-artist discs. Per-provider blanking has been removed in favour of one rule applied centrally to every metadata candidate, so the toggle reaches CD-Text and GnuDB as well as Bandcamp, Discogs, MusicBrainz, and file-imported metadata.
 
 ### Changed
 
@@ -22,6 +28,9 @@ The project history starts at `v0.1`.
 - The CLI and TUI metadata flows now share one lookup engine, so automatic lookup and Manual Search follow the same provider rules.
 - Automatic metadata sources are now limited to disc-lookup providers: CD-Text, local CDDB cache, MusicBrainz disc lookup, and GnuDB.
 - Discogs has been moved out of automatic source selection and is now queried only during Manual Search; Bandcamp remains URL-import-only.
+- The TUI action bar now reads `Sources… → Manual Search → Import → Manual Entry`; previously `Import` sat to the left of `Manual Search`.
+- The Settings popup is organised into labelled sections (Paths, Rip behavior, Output, Metadata sources, Lookup behavior, Logging, Notifications & display) instead of trailing every option under the single "Default automatic metadata sources" header.
+- Adjusted spacing in the running-progress section so the active step label is easier to track.
 
 ### Fixed
 
@@ -32,6 +41,7 @@ The project history starts at `v0.1`.
 - Automatic TUI re-fetches no longer turn the current tag fields into implicit Manual Search terms, which prevents Discogs or MusicBrainz text search from running unless Manual Search is used explicitly.
 - GnuDB records that redundantly prefix the album and track titles with the artist (e.g. `DTITLE=Artist / Artist - Album` and `TTITLE0=Artist - Track`) are now parsed correctly: the album artist is stripped from the album field and the track titles, and the per-track artist is recovered from those entries.
 - GnuDB CDDBP exchanges now send each command separately and wait for its response, instead of pipelining all four commands into one packet. `gnudb.gnudb.org` rejected the pipelined input with `500 Command syntax error` and then left the socket open, costing the full `metadata_timeout` (≈15s with default settings) per query — effectively making the CDDBP path silently broken for that server. The new sequential exchange typically completes in under a second.
+- Editing the Library base directory in Settings now refreshes the displayed target path immediately instead of leaving the previous album folder visible.
 
 ## [0.3] - 2026-04-02
 
