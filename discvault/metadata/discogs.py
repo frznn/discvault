@@ -48,6 +48,55 @@ def lookup(
 
     results: list[Metadata] = []
     seen_ids: set[int] = set()
+
+    master_plans = _master_search_plans(
+        seed_candidates or [],
+        artist=artist,
+        album=album,
+        year=year,
+    )
+    for params in master_plans:
+        try:
+            resp = requests.get(
+                f"{_API_BASE}/database/search",
+                params=params,
+                headers=headers,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            if debug:
+                print(f"[metadata-debug] Discogs master search failed: {exc}")
+            continue
+
+        items = data.get("results", []) or []
+        if not items:
+            continue
+        master_id = items[0].get("id")
+        if not isinstance(master_id, int):
+            continue
+        release_id = _master_main_release_id(
+            master_id,
+            headers=headers,
+            timeout=timeout,
+            debug=debug,
+        )
+        if release_id is None or release_id in seen_ids:
+            continue
+        meta = _fetch_release(
+            release_id,
+            disc_info,
+            headers=headers,
+            timeout=timeout,
+            debug=debug,
+            allow_inexact_track_count=True,
+        )
+        if meta is None:
+            continue
+        results.append(meta)
+        seen_ids.add(release_id)
+
     for params, allow_inexact_track_count in search_plans:
         try:
             resp = requests.get(
@@ -159,6 +208,52 @@ def _search_plans(
             params["year"] = search_year
         if "artist" in params or "release_title" in params:
             _add(params, allow_inexact_track_count=False)
+
+    return plans
+
+
+def _master_search_plans(
+    seed_candidates: list[Metadata],
+    *,
+    artist: str,
+    album: str,
+    year: str,
+) -> list[dict[str, str | int]]:
+    """One targeted ``type=master`` search per (artist, album[, year]) seed."""
+    plans: list[dict[str, str | int]] = []
+    seen: set[tuple[tuple[str, str], ...]] = set()
+
+    candidates = list(seed_candidates)
+    if artist or album:
+        candidates.append(
+            Metadata(
+                source="Manual",
+                album_artist=artist,
+                album=album,
+                year=year,
+            )
+        )
+
+    for candidate in candidates:
+        artist_name = trim(candidate.album_artist)
+        album_name = trim(candidate.album)
+        if not artist_name and not album_name:
+            continue
+        search_year = candidate.year if candidate.year.isdigit() else ""
+        params: dict[str, str | int] = {"type": "master", "per_page": 5}
+        if artist_name:
+            params["artist"] = artist_name
+        if album_name:
+            params["release_title"] = album_name
+        if search_year:
+            params["year"] = search_year
+        if "artist" not in params and "release_title" not in params:
+            continue
+        key = tuple(sorted((str(name), str(value)) for name, value in params.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        plans.append(params)
 
     return plans
 

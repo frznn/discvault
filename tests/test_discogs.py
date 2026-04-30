@@ -15,6 +15,62 @@ class DiscogsTests(unittest.TestCase):
         response.json.return_value = payload
         return response
 
+    def test_seeded_lookup_prepends_master_resolved_release(self) -> None:
+        disc_info = DiscInfo(device="/dev/cdrom", track_count=2)
+
+        master_search = self._response({"results": [{"id": 55269, "type": "master"}]})
+        master_detail = self._response({"id": 55269, "main_release": 7777})
+        master_release = self._response({
+            "artists": [{"name": "Creedence Clearwater Revival"}],
+            "title": "Bayou Country (Master)",
+            "year": 1969,
+            "tracklist": [
+                {"type_": "track", "title": "Born on the Bayou"},
+                {"type_": "track", "title": "Bootleg"},
+            ],
+        })
+        release_search = self._response({"results": [{"id": 7777}, {"id": 8888}]})
+        # 7777 is already in seen_ids via the master path → only 8888 is fetched.
+        alt_release = self._response({
+            "artists": [{"name": "Creedence Clearwater Revival"}],
+            "title": "Bayou Country (UK pressing)",
+            "year": 1969,
+            "tracklist": [
+                {"type_": "track", "title": "Born on the Bayou"},
+                {"type_": "track", "title": "Bootleg"},
+            ],
+        })
+
+        with patch(
+            "discvault.metadata.discogs.requests.get",
+            side_effect=[
+                master_search,
+                master_detail,
+                master_release,
+                release_search,
+                alt_release,
+            ],
+        ) as get:
+            results = lookup(
+                disc_info,
+                artist="Creedence Clearwater Revival",
+                album="Bayou Country",
+            )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0].album, "Bayou Country (Master)")
+        self.assertEqual(results[0].discogs_release_id, 7777)
+        self.assertEqual(results[1].album, "Bayou Country (UK pressing)")
+        self.assertEqual(results[1].discogs_release_id, 8888)
+
+        first_call = get.call_args_list[0]
+        self.assertEqual(first_call.kwargs["params"]["type"], "master")
+        # No second master detail call is issued — only top-1 hit per seed is resolved.
+        master_detail_calls = [
+            call for call in get.call_args_list if "/masters/" in call.args[0]
+        ]
+        self.assertEqual(len(master_detail_calls), 1)
+
     def test_free_form_lookup_uses_q_search_and_keeps_inexact_track_counts(self) -> None:
         disc_info = DiscInfo(device="/dev/cdrom", track_count=1)
         search_payload = {"results": [{"id": 42}]}
