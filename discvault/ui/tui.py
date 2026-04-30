@@ -517,8 +517,8 @@ class DiscvaultApp(App[None]):
 
                         with Horizontal(id="metadata-actions-row"):
                             yield Button("Sources…", id="btn-sources", disabled=True)
-                            yield Button("Import", id="btn-import", disabled=True)
                             yield Button("Manual Search", id="btn-more", disabled=True)
+                            yield Button("Import", id="btn-import", disabled=True)
                             yield Button("Manual Entry", id="btn-manual", disabled=True)
                             with Horizontal(id="metadata-actions-right"):
                                 yield Checkbox("Download Cover Art", id="chk-cover-art", compact=True, disabled=True)
