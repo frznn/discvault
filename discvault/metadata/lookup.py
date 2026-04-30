@@ -120,6 +120,7 @@ def fetch_candidates(
                 disc_info=disc_info,
                 timeout=cfg.metadata_timeout,
                 debug=debug,
+                token=cfg.discogs.token,
             )
         except ValueError as exc:
             _error(label, str(exc), time.monotonic() - url_start)

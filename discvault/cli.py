@@ -754,7 +754,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--metadata-file", metavar="FILE",
                    help="Import metadata from a .cue, .toc, .json, or .toml file")
     p.add_argument("--metadata-url", "--bandcamp-url", dest="metadata_url", metavar="URL",
-                   help="Import metadata from a supported page URL (currently Bandcamp albums)")
+                   help="Import metadata from a supported page URL (Bandcamp albums or Discogs releases)")
 
     # Manual metadata override
     p.add_argument("--artist", metavar="NAME",

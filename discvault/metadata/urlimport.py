@@ -4,9 +4,9 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from .types import DiscInfo, Metadata
-from . import bandcamp
+from . import bandcamp, discogs
 
-_SUPPORTED_PROVIDERS = {"Bandcamp"}
+_SUPPORTED_PROVIDERS = {"Bandcamp", "Discogs"}
 
 
 def lookup_url(
@@ -15,6 +15,7 @@ def lookup_url(
     disc_info: DiscInfo | None = None,
     timeout: int = 15,
     debug: bool = False,
+    token: str = "",
 ) -> list[Metadata]:
     """Route a metadata URL to the appropriate site-specific importer."""
     provider = provider_name(url)
@@ -24,6 +25,14 @@ def lookup_url(
             disc_info=disc_info,
             timeout=timeout,
             debug=debug,
+        )
+    if provider == "Discogs":
+        return discogs.lookup_url(
+            url,
+            disc_info=disc_info,
+            timeout=timeout,
+            debug=debug,
+            token=token,
         )
     if provider:
         raise ValueError(f"Unsupported metadata URL provider: {provider}")
@@ -40,6 +49,8 @@ def provider_name(url: str) -> str:
     host = parsed.netloc.lower()
     if host.endswith("bandcamp.com"):
         return "Bandcamp"
+    if host.endswith("discogs.com"):
+        return "Discogs"
     if host:
         return host
     return ""

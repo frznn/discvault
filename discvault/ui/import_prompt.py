@@ -152,7 +152,7 @@ class MetadataImportPromptScreen(ModalScreen[tuple[str, str] | None]):
     """
 
     SUPPORTED_FILE_TYPES = (".cue", ".toc", ".json", ".toml")
-    SUPPORTED_URL_SITES = ("Bandcamp",)
+    SUPPORTED_URL_SITES = ("Bandcamp", "Discogs")
 
     def __init__(self, *, file_value: str, url_value: str) -> None:
         super().__init__()

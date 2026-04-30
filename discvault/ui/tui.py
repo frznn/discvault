@@ -1452,6 +1452,7 @@ class DiscvaultApp(App[None]):
                     disc_info=disc_info,
                     timeout=timeout,
                     debug=meta_debug,
+                    token=self._cfg.discogs.token,
                 )
                 source_label = "metadata URL"
             else:

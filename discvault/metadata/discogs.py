@@ -1,11 +1,17 @@
 """Discogs metadata provider."""
 from __future__ import annotations
 
+import re
+from urllib.parse import urlparse
+
 import requests
 
 from .search import combine_search_text
 from .sanitize import trim
 from .types import DiscInfo, Metadata, Track
+
+_RELEASE_PATH_RE = re.compile(r"(?:^|/)release/(\d+)(?:[/-]|$)", re.IGNORECASE)
+_MASTER_PATH_RE = re.compile(r"(?:^|/)master/(\d+)(?:[/-]|$)", re.IGNORECASE)
 
 _API_BASE = "https://api.discogs.com"
 _USER_AGENT = "discvault/0.1 (+https://github.com/frznn/discvault)"
@@ -155,6 +161,106 @@ def _search_plans(
             _add(params, allow_inexact_track_count=False)
 
     return plans
+
+
+def lookup_url(
+    url: str,
+    *,
+    disc_info: DiscInfo | None = None,
+    timeout: int = 15,
+    debug: bool = False,
+    token: str = "",
+) -> list[Metadata]:
+    """Fetch a single Discogs release by URL (release or master)."""
+    parsed = _id_from_url(url)
+    if parsed is None:
+        if debug:
+            print(f"[metadata-debug] Discogs: not a supported release/master URL: {url}")
+        return []
+
+    kind, discogs_id = parsed
+    headers = {"User-Agent": _USER_AGENT}
+    if token:
+        headers["Authorization"] = f"Discogs token={token}"
+
+    if kind == "master":
+        release_id = _master_main_release_id(
+            discogs_id,
+            headers=headers,
+            timeout=timeout,
+            debug=debug,
+        )
+        if release_id is None:
+            return []
+    else:
+        release_id = discogs_id
+
+    meta = _fetch_release(
+        release_id,
+        disc_info or DiscInfo(device=""),
+        headers=headers,
+        timeout=timeout,
+        debug=debug,
+        allow_inexact_track_count=True,
+    )
+    return [meta] if meta else []
+
+
+def _id_from_url(url: str) -> tuple[str, int] | None:
+    """Return ('release'|'master', id) for a Discogs URL, or None."""
+    candidate = (url or "").strip()
+    if not candidate:
+        return None
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+    parsed = urlparse(candidate)
+    host = parsed.netloc.lower()
+    if not host.endswith("discogs.com"):
+        return None
+    for kind, pattern in (("release", _RELEASE_PATH_RE), ("master", _MASTER_PATH_RE)):
+        match = pattern.search(parsed.path)
+        if match:
+            try:
+                return kind, int(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def _release_id_from_url(url: str) -> int | None:
+    """Compatibility wrapper: only returns IDs for /release/<id> URLs."""
+    parsed = _id_from_url(url)
+    if parsed is None or parsed[0] != "release":
+        return None
+    return parsed[1]
+
+
+def _master_main_release_id(
+    master_id: int,
+    *,
+    headers: dict[str, str],
+    timeout: int,
+    debug: bool,
+) -> int | None:
+    try:
+        resp = requests.get(
+            f"{_API_BASE}/masters/{master_id}",
+            headers=headers,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        if debug:
+            print(f"[metadata-debug] Discogs master fetch failed ({master_id}): {exc}")
+        return None
+
+    main_release = data.get("main_release")
+    if isinstance(main_release, int) and main_release > 0:
+        return main_release
+    if debug:
+        print(f"[metadata-debug] Discogs master {master_id} has no main_release; paste a specific release URL")
+    return None
 
 
 def _fetch_release(

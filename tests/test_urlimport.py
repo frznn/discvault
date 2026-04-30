@@ -14,6 +14,12 @@ class UrlImportTests(unittest.TestCase):
             "Bandcamp",
         )
 
+    def test_provider_name_detects_discogs(self) -> None:
+        self.assertEqual(
+            urlimport.provider_name("https://www.discogs.com/release/12345-Artist-Title"),
+            "Discogs",
+        )
+
     def test_lookup_url_routes_to_bandcamp(self) -> None:
         disc_info = DiscInfo(device="/dev/cdrom")
         meta = Metadata(source="Bandcamp", album_artist="Artist", album="Album")
@@ -29,6 +35,24 @@ class UrlImportTests(unittest.TestCase):
 
         self.assertEqual(results, [meta])
         lookup.assert_called_once()
+
+    def test_lookup_url_routes_to_discogs_with_token(self) -> None:
+        disc_info = DiscInfo(device="/dev/cdrom")
+        meta = Metadata(source="Discogs", album_artist="Artist", album="Album")
+
+        with patch(
+            "discvault.metadata.urlimport.discogs.lookup_url",
+            return_value=[meta],
+        ) as lookup:
+            results = urlimport.lookup_url(
+                "https://www.discogs.com/release/12345-Artist-Title",
+                disc_info=disc_info,
+                token="secret",
+            )
+
+        self.assertEqual(results, [meta])
+        lookup.assert_called_once()
+        self.assertEqual(lookup.call_args.kwargs["token"], "secret")
 
     def test_lookup_url_rejects_unsupported_hosts(self) -> None:
         with self.assertRaises(ValueError):
