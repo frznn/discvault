@@ -64,6 +64,13 @@ class ConfigScreen(ModalScreen[Config | None]):
         text-style: italic;
     }
 
+    .cfg-section-header {
+        color: $accent;
+        margin-top: 2;
+        margin-bottom: 1;
+        text-style: bold;
+    }
+
 #config-buttons {
         height: auto;
         align: right middle;
@@ -101,8 +108,11 @@ class ConfigScreen(ModalScreen[Config | None]):
 
     def _rows(self) -> list:
         return [
+            Static("Paths", classes="cfg-section-header"),
             self._input_row("Library", "cfg-base-dir", self._cfg.base_dir),
             self._input_row("Work dir", "cfg-work-dir", self._cfg.work_dir),
+
+            Static("Rip behavior", classes="cfg-section-header"),
             self._select_row(
                 "Image ripper",
                 "cfg-image-ripper",
@@ -121,18 +131,47 @@ class ConfigScreen(ModalScreen[Config | None]):
                 Button("Reset", id="cfg-cdrdao-reset", compact=True),
                 classes="cfg-row",
             ),
-            self._input_row("Metadata timeout", "cfg-timeout", str(self._cfg.metadata_timeout)),
             self._input_row(
                 "Sample offset",
                 "cfg-sample-offset",
                 str(self._cfg.cdparanoia_sample_offset),
             ),
-            Static("Default automatic metadata sources (used on startup):", classes="cfg-section-label"),
+            self._check_row(
+                ("Enable AccurateRip", "cfg-accuraterip", self._cfg.accuraterip_enabled),
+                ("Eject when done", "cfg-eject", self._cfg.eject_after),
+            ),
+
+            Static("Output", classes="cfg-section-header"),
+            self._check_row(
+                ("Keep WAV files", "cfg-keep-wav", self._cfg.keep_wav),
+                ("Download cover art", "cfg-cover-art", self._cfg.download_cover_art),
+            ),
+            self._input_row("Opus bitrate", "cfg-opus-bitrate", str(self._cfg.opus_bitrate)),
+            self._input_row("AAC bitrate", "cfg-aac-bitrate", str(self._cfg.aac_bitrate)),
+
+            Static("Metadata sources", classes="cfg-section-header"),
+            Static("Enable by default:", classes="cfg-section-label"),
             self._check_row(
                 ("CD-Text", "cfg-src-cdtext", self._cfg.default_src_cdtext),
                 ("MusicBrainz", "cfg-src-mb", self._cfg.default_src_musicbrainz),
                 ("GnuDB", "cfg-src-gnudb", self._cfg.default_src_gnudb),
             ),
+            self._input_row("Metadata timeout", "cfg-timeout", str(self._cfg.metadata_timeout)),
+            self._check_row(
+                ("Use local CDDB cache", "cfg-cache", self._cfg.use_local_cddb_cache),
+            ),
+            self._input_row("GnuDB host", "cfg-gnudb-host", self._cfg.gnudb.host),
+            self._input_row("GnuDB port", "cfg-gnudb-port", str(self._cfg.gnudb.port)),
+            self._input_row("GnuDB user", "cfg-hello-user", self._cfg.gnudb.hello_user),
+            self._input_row("GnuDB program", "cfg-hello-program", self._cfg.gnudb.hello_program),
+            self._input_row("GnuDB version", "cfg-hello-version", self._cfg.gnudb.hello_version),
+            self._input_row(
+                "Discogs token (manual search only)",
+                "cfg-discogs-token",
+                self._cfg.discogs.token,
+            ),
+
+            Static("Lookup behavior", classes="cfg-section-header"),
             self._check_row(
                 (
                     "Stop at first match",
@@ -140,34 +179,27 @@ class ConfigScreen(ModalScreen[Config | None]):
                     self._cfg.lookup_stop_at_first_match,
                 ),
                 (
-                    "Log lookup durations",
-                    "cfg-log-timings",
-                    self._cfg.lookup_log_timings,
-                ),
-            ),
-            self._check_row(
-                (
-                    "Write logs to file",
-                    "cfg-log-to-file",
-                    self._cfg.log_to_file,
-                ),
-                (
                     "Blank redundant track artists",
                     "cfg-blank-redundant-artists",
                     self._cfg.blank_redundant_track_artist,
                 ),
             ),
+
+            Static("Logging", classes="cfg-section-header"),
             self._check_row(
-                ("Use local CDDB cache", "cfg-cache", self._cfg.use_local_cddb_cache),
-                ("Enable AccurateRip", "cfg-accuraterip", self._cfg.accuraterip_enabled),
+                (
+                    "Log lookup durations",
+                    "cfg-log-timings",
+                    self._cfg.lookup_log_timings,
+                ),
+                (
+                    "Write logs to file",
+                    "cfg-log-to-file",
+                    self._cfg.log_to_file,
+                ),
             ),
-            self._check_row(
-                ("Keep WAV files", "cfg-keep-wav", self._cfg.keep_wav),
-                ("Eject when done", "cfg-eject", self._cfg.eject_after),
-            ),
-            self._check_row(
-                ("Download cover art", "cfg-cover-art", self._cfg.download_cover_art),
-            ),
+
+            Static("Notifications & display", classes="cfg-section-header"),
             self._select_row(
                 "Completion sound",
                 "cfg-completion-sound",
@@ -190,18 +222,6 @@ class ConfigScreen(ModalScreen[Config | None]):
                     ("None", "none"),
                 ],
                 self._cfg.progress_style,
-            ),
-            self._input_row("Opus bitrate", "cfg-opus-bitrate", str(self._cfg.opus_bitrate)),
-            self._input_row("AAC bitrate", "cfg-aac-bitrate", str(self._cfg.aac_bitrate)),
-            self._input_row("GnuDB host", "cfg-gnudb-host", self._cfg.gnudb.host),
-            self._input_row("GnuDB port", "cfg-gnudb-port", str(self._cfg.gnudb.port)),
-            self._input_row("GnuDB user", "cfg-hello-user", self._cfg.gnudb.hello_user),
-            self._input_row("GnuDB program", "cfg-hello-program", self._cfg.gnudb.hello_program),
-            self._input_row("GnuDB version", "cfg-hello-version", self._cfg.gnudb.hello_version),
-            self._input_row(
-                "Discogs token (manual search only)",
-                "cfg-discogs-token",
-                self._cfg.discogs.token,
             ),
         ]
 
