@@ -151,6 +151,9 @@ class MetadataImportPromptScreen(ModalScreen[tuple[str, str] | None]):
     }
     """
 
+    SUPPORTED_FILE_TYPES = (".cue", ".toc", ".json", ".toml")
+    SUPPORTED_URL_SITES = ("Bandcamp",)
+
     def __init__(self, *, file_value: str, url_value: str) -> None:
         super().__init__()
         self._mode_values = {
@@ -163,7 +166,7 @@ class MetadataImportPromptScreen(ModalScreen[tuple[str, str] | None]):
         yield Vertical(
             Label("Import Metadata", id="metadata-import-title"),
             Label(
-                "Choose File or URL, then enter a path in the field below.",
+                self._help_for_mode(self._mode),
                 id="metadata-import-label",
             ),
             Horizontal(
@@ -217,6 +220,7 @@ class MetadataImportPromptScreen(ModalScreen[tuple[str, str] | None]):
         self._mode_values[self._mode] = self.query_one("#metadata-import-input", Input).value
         self._mode = mode
         self._refresh_mode_buttons()
+        self.query_one("#metadata-import-label", Label).update(self._help_for_mode(self._mode))
         input_widget = self.query_one("#metadata-import-input", Input)
         input_widget.value = self._mode_values[self._mode]
         input_widget.placeholder = self._placeholder_for_mode(self._mode)
@@ -232,3 +236,9 @@ class MetadataImportPromptScreen(ModalScreen[tuple[str, str] | None]):
         if mode == "url":
             return "https://artist.bandcamp.com/album/album-name"
         return "/path/to/album.cue"
+
+    @classmethod
+    def _help_for_mode(cls, mode: str) -> str:
+        if mode == "url":
+            return f"Supported sites: {', '.join(cls.SUPPORTED_URL_SITES)}"
+        return f"Supported file types: {', '.join(cls.SUPPORTED_FILE_TYPES)}"
