@@ -7,6 +7,7 @@ from discvault.config import Config
 from discvault.metadata.lookup import (
     LookupCallbacks,
     _blank_redundant_track_artists,
+    _metadata_equivalent,
     fetch_candidates,
 )
 from discvault.metadata.types import DiscInfo, Metadata, Track
@@ -386,6 +387,104 @@ class BlankRedundantTrackArtistsTests(unittest.TestCase):
         meta = self._meta("", "Artist", "Artist")
         _blank_redundant_track_artists(meta)
         self.assertEqual([t.artist for t in meta.tracks], ["Artist", "Artist"])
+
+
+class MetadataEquivalentTests(unittest.TestCase):
+    def _meta(self, **overrides) -> Metadata:
+        base = dict(
+            source="X",
+            album_artist="Artist",
+            album="Album",
+            year="2010",
+            tracks=[Track(number=1, title="One"), Track(number=2, title="Two")],
+        )
+        base.update(overrides)
+        return Metadata(**base)
+
+    def test_same_content_different_source_is_equivalent(self) -> None:
+        a = self._meta(source="GnuDB", match_quality="disc_id")
+        b = self._meta(source="GnuDB-CDDBP", match_quality="disc_id")
+        self.assertTrue(_metadata_equivalent(a, b))
+
+    def test_match_quality_difference_is_ignored(self) -> None:
+        a = self._meta(source="MusicBrainz", match_quality="disc_id")
+        b = self._meta(source="MusicBrainz", match_quality="toc")
+        self.assertTrue(_metadata_equivalent(a, b))
+
+    def test_album_difference_breaks_equivalence(self) -> None:
+        a = self._meta(album="Album")
+        b = self._meta(album="Album (Remastered)")
+        self.assertFalse(_metadata_equivalent(a, b))
+
+    def test_track_difference_breaks_equivalence(self) -> None:
+        a = self._meta()
+        b = self._meta(tracks=[Track(number=1, title="One"), Track(number=2, title="Different")])
+        self.assertFalse(_metadata_equivalent(a, b))
+
+    def test_identifier_field_difference_breaks_equivalence(self) -> None:
+        a = self._meta(mb_release_id="aaa")
+        b = self._meta(mb_release_id="bbb")
+        self.assertFalse(_metadata_equivalent(a, b))
+
+    def test_discogs_release_id_difference_breaks_equivalence(self) -> None:
+        a = self._meta(discogs_release_id=1)
+        b = self._meta(discogs_release_id=2)
+        self.assertFalse(_metadata_equivalent(a, b))
+
+
+class DedupeEquivalentCandidatesConfigTests(unittest.TestCase):
+    def _disc_info(self) -> DiscInfo:
+        return DiscInfo(device="/dev/cdrom", track_count=2, freedb_disc_id="abcdef01", mb_disc_id="disc-id")
+
+    def _gnudb_record(self, source: str) -> Metadata:
+        return Metadata(
+            source=source,
+            album_artist="Creedence Clearwater Revival",
+            album="Green River",
+            year="1969",
+            tracks=[Track(number=1, title="Green River"), Track(number=2, title="Commotion")],
+        )
+
+    def test_dedupe_on_drops_equivalent_gnudb_records(self) -> None:
+        cfg = Config()
+        cfg.dedupe_equivalent_candidates = True
+        cfg.lookup_stop_at_first_match = False
+        cfg.gnudb.host = "gnudb.gnudb.org"
+        with patch(
+            "discvault.metadata.gnudb.lookup_http",
+            return_value=[self._gnudb_record("GnuDB")],
+        ), patch(
+            "discvault.metadata.gnudb.lookup_cddbp",
+            return_value=[self._gnudb_record("GnuDB-CDDBP")],
+        ):
+            results = fetch_candidates(
+                self._disc_info(),
+                cfg,
+                sources={"cdtext": False, "musicbrainz": False, "gnudb": True},
+                source_order=["gnudb"],
+            )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].source, "GnuDB")
+
+    def test_dedupe_off_keeps_both_protocol_records(self) -> None:
+        cfg = Config()
+        cfg.dedupe_equivalent_candidates = False
+        cfg.lookup_stop_at_first_match = False
+        cfg.gnudb.host = "gnudb.gnudb.org"
+        with patch(
+            "discvault.metadata.gnudb.lookup_http",
+            return_value=[self._gnudb_record("GnuDB")],
+        ), patch(
+            "discvault.metadata.gnudb.lookup_cddbp",
+            return_value=[self._gnudb_record("GnuDB-CDDBP")],
+        ):
+            results = fetch_candidates(
+                self._disc_info(),
+                cfg,
+                sources={"cdtext": False, "musicbrainz": False, "gnudb": True},
+                source_order=["gnudb"],
+            )
+        self.assertEqual([m.source for m in results], ["GnuDB", "GnuDB-CDDBP"])
 
 
 class BlankRedundantTrackArtistsConfigTests(unittest.TestCase):

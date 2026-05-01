@@ -66,10 +66,15 @@ def fetch_candidates(
     search_disc_info = manual_search_disc_info or disc_info
 
     results: list[Metadata] = []
+    dedupe_equivalent = cfg.dedupe_equivalent_candidates
 
     def _add(metas: list[Metadata]) -> None:
         for m in metas:
-            if m not in results:
+            if dedupe_equivalent:
+                duplicate = any(_metadata_equivalent(m, existing) for existing in results)
+            else:
+                duplicate = m in results
+            if not duplicate:
                 results.append(m)
 
     def _start(label: str) -> None:
@@ -263,6 +268,21 @@ def fetch_candidates(
             _blank_redundant_track_artists(meta)
 
     return results
+
+
+def _metadata_equivalent(a: Metadata, b: Metadata) -> bool:
+    """True iff two candidates match on every field except ``source`` and ``match_quality``."""
+    return (
+        a.album_artist == b.album_artist
+        and a.album == b.album
+        and a.year == b.year
+        and a.tracks == b.tracks
+        and a.cover_art_url == b.cover_art_url
+        and a.cover_art_ext == b.cover_art_ext
+        and a.mb_release_id == b.mb_release_id
+        and a.mb_release_group_id == b.mb_release_group_id
+        and a.discogs_release_id == b.discogs_release_id
+    )
 
 
 def _blank_redundant_track_artists(meta: Metadata) -> None:

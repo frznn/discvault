@@ -184,6 +184,13 @@ class ConfigScreen(ModalScreen[Config | None]):
                     self._cfg.blank_redundant_track_artist,
                 ),
             ),
+            self._check_row(
+                (
+                    "Dedupe equivalent candidates",
+                    "cfg-dedupe-equivalent",
+                    self._cfg.dedupe_equivalent_candidates,
+                ),
+            ),
 
             Static("Logging", classes="cfg-section-header"),
             self._check_row(
@@ -292,6 +299,7 @@ class ConfigScreen(ModalScreen[Config | None]):
         cfg.lookup_log_timings = self._check("cfg-log-timings")
         cfg.log_to_file = self._check("cfg-log-to-file")
         cfg.blank_redundant_track_artist = self._check("cfg-blank-redundant-artists")
+        cfg.dedupe_equivalent_candidates = self._check("cfg-dedupe-equivalent")
         completion_sound = self.query_one("#cfg-completion-sound", Select).value
         if completion_sound in {"bell", "chime", "both", "off"}:
             cfg.completion_sound = completion_sound

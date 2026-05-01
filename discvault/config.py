@@ -68,6 +68,7 @@ class Config:
     lookup_log_timings: bool = False
     log_to_file: bool = False
     blank_redundant_track_artist: bool = True
+    dedupe_equivalent_candidates: bool = True
     manual_src_musicbrainz: bool = True
     manual_src_discogs: bool = True
     use_local_cddb_cache: bool = True
@@ -159,6 +160,10 @@ class Config:
             dv.get("blank_redundant_track_artist"),
             cfg.blank_redundant_track_artist,
         )
+        cfg.dedupe_equivalent_candidates = _as_bool(
+            dv.get("dedupe_equivalent_candidates"),
+            cfg.dedupe_equivalent_candidates,
+        )
         cfg.manual_src_musicbrainz = _as_bool(
             dv.get("manual_src_musicbrainz"),
             cfg.manual_src_musicbrainz,
@@ -228,6 +233,7 @@ class Config:
             f"lookup_log_timings = {str(self.lookup_log_timings).lower()}",
             f"log_to_file = {str(self.log_to_file).lower()}",
             f"blank_redundant_track_artist = {str(self.blank_redundant_track_artist).lower()}",
+            f"dedupe_equivalent_candidates = {str(self.dedupe_equivalent_candidates).lower()}",
             f"manual_src_musicbrainz = {str(self.manual_src_musicbrainz).lower()}",
             f"manual_src_discogs = {str(self.manual_src_discogs).lower()}",
             f"use_local_cddb_cache = {str(self.use_local_cddb_cache).lower()}",
