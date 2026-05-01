@@ -160,8 +160,6 @@ class ConfigScreen(ModalScreen[Config | None]):
             self._check_row(
                 ("Use local CDDB cache", "cfg-cache", self._cfg.use_local_cddb_cache),
             ),
-            self._input_row("GnuDB host", "cfg-gnudb-host", self._cfg.gnudb.host),
-            self._input_row("GnuDB port", "cfg-gnudb-port", str(self._cfg.gnudb.port)),
             self._input_row("GnuDB user", "cfg-hello-user", self._cfg.gnudb.hello_user),
             self._input_row("GnuDB program", "cfg-hello-program", self._cfg.gnudb.hello_program),
             self._input_row("GnuDB version", "cfg-hello-version", self._cfg.gnudb.hello_version),
@@ -308,8 +306,6 @@ class ConfigScreen(ModalScreen[Config | None]):
             cfg.progress_style = progress_style_val
         cfg.opus_bitrate = max(32, self._int_input("cfg-opus-bitrate", "Opus bitrate"))
         cfg.aac_bitrate = max(96, self._int_input("cfg-aac-bitrate", "AAC bitrate"))
-        cfg.gnudb.host = self._input("cfg-gnudb-host")
-        cfg.gnudb.port = max(1, self._int_input("cfg-gnudb-port", "GnuDB port"))
         cfg.gnudb.hello_user = self._input("cfg-hello-user")
         cfg.gnudb.hello_program = self._input("cfg-hello-program")
         cfg.gnudb.hello_version = self._input("cfg-hello-version")

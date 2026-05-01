@@ -71,7 +71,6 @@ class LookupTests(unittest.TestCase):
 
     def test_source_order_drives_provider_sequence(self) -> None:
         cfg = Config()
-        cfg.gnudb.host = "gnudb.example"
         disc_info = DiscInfo(
             device="/dev/cdrom",
             track_count=8,
@@ -87,8 +86,7 @@ class LookupTests(unittest.TestCase):
         with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
             patch("discvault.metadata.local.lookup", return_value=[]), \
             patch("discvault.metadata.musicbrainz.lookup", return_value=[]), \
-            patch("discvault.metadata.gnudb.lookup_http", return_value=[]), \
-            patch("discvault.metadata.gnudb.lookup_cddbp", return_value=[]):
+            patch("discvault.metadata.gnudb.lookup_http", return_value=[]):
             fetch_candidates(
                 disc_info,
                 cfg,
@@ -100,7 +98,7 @@ class LookupTests(unittest.TestCase):
         priority_events = [e for e in events if e not in {"Local CDDB cache"}]
         self.assertEqual(
             priority_events,
-            ["GnuDB HTTP", "GnuDB CDDBP (gnudb.example)", "CD-Text", "MusicBrainz"],
+            ["GnuDB", "CD-Text", "MusicBrainz"],
         )
         self.assertEqual(events[0], "Local CDDB cache")
 
@@ -127,7 +125,7 @@ class LookupTests(unittest.TestCase):
                 callbacks=LookupCallbacks(on_start=events.append),
             )
 
-        self.assertEqual(events, ["MusicBrainz", "CD-Text", "GnuDB HTTP"])
+        self.assertEqual(events, ["MusicBrainz", "CD-Text", "GnuDB"])
 
 
     def test_manual_search_skips_discogs_when_toggle_off(self) -> None:
@@ -259,7 +257,7 @@ class LookupTests(unittest.TestCase):
                 callbacks=LookupCallbacks(on_start=events.append),
             )
 
-        self.assertEqual(events, ["CD-Text", "MusicBrainz", "GnuDB HTTP"])
+        self.assertEqual(events, ["CD-Text", "MusicBrainz", "GnuDB"])
 
     def test_short_circuit_walks_past_empty_providers(self) -> None:
         cfg = Config()
@@ -287,7 +285,7 @@ class LookupTests(unittest.TestCase):
                 callbacks=LookupCallbacks(on_start=events.append),
             )
 
-        self.assertEqual(events, ["CD-Text", "MusicBrainz", "GnuDB HTTP"])
+        self.assertEqual(events, ["CD-Text", "MusicBrainz", "GnuDB"])
 
     def test_short_circuit_cache_hit_skips_priority_loop(self) -> None:
         cfg = Config()
@@ -317,37 +315,6 @@ class LookupTests(unittest.TestCase):
         cdtext_lookup.assert_not_called()
         mb_lookup.assert_not_called()
         gnudb_http.assert_not_called()
-
-    def test_short_circuit_gnudb_http_hit_skips_cddbp(self) -> None:
-        cfg = Config()
-        cfg.use_local_cddb_cache = False
-        cfg.gnudb.host = "gnudb.example"
-        disc_info = DiscInfo(
-            device="/dev/cdrom",
-            track_count=8,
-            mb_disc_id="disc-id",
-            freedb_disc_id="12345678",
-        )
-
-        events: list[str] = []
-
-        with patch("discvault.metadata.cdtext.lookup", return_value=[]), \
-            patch("discvault.metadata.musicbrainz.lookup", return_value=[]), \
-            patch(
-                "discvault.metadata.gnudb.lookup_http",
-                return_value=[Metadata(source="GnuDB", album_artist="X", album="E")],
-            ), patch("discvault.metadata.gnudb.lookup_cddbp", return_value=[]) as cddbp:
-            fetch_candidates(
-                disc_info,
-                cfg,
-                sources={"cdtext": True, "musicbrainz": True, "gnudb": True},
-                source_order=["gnudb", "cdtext", "musicbrainz"],
-                callbacks=LookupCallbacks(on_start=events.append),
-            )
-
-        self.assertEqual(events, ["GnuDB HTTP"])
-        cddbp.assert_not_called()
-
 
 class BlankRedundantTrackArtistsTests(unittest.TestCase):
     def _meta(self, album_artist: str, *track_artists: str) -> Metadata:
@@ -403,7 +370,7 @@ class MetadataEquivalentTests(unittest.TestCase):
 
     def test_same_content_different_source_is_equivalent(self) -> None:
         a = self._meta(source="GnuDB", match_quality="disc_id")
-        b = self._meta(source="GnuDB-CDDBP", match_quality="disc_id")
+        b = self._meta(source="MusicBrainz", match_quality="disc_id")
         self.assertTrue(_metadata_equivalent(a, b))
 
     def test_match_quality_difference_is_ignored(self) -> None:
@@ -436,7 +403,7 @@ class DedupeEquivalentCandidatesConfigTests(unittest.TestCase):
     def _disc_info(self) -> DiscInfo:
         return DiscInfo(device="/dev/cdrom", track_count=2, freedb_disc_id="abcdef01", mb_disc_id="disc-id")
 
-    def _gnudb_record(self, source: str) -> Metadata:
+    def _record(self, source: str) -> Metadata:
         return Metadata(
             source=source,
             album_artist="Creedence Clearwater Revival",
@@ -445,46 +412,44 @@ class DedupeEquivalentCandidatesConfigTests(unittest.TestCase):
             tracks=[Track(number=1, title="Green River"), Track(number=2, title="Commotion")],
         )
 
-    def test_dedupe_on_drops_equivalent_gnudb_records(self) -> None:
+    def test_dedupe_on_drops_equivalent_cross_provider_records(self) -> None:
         cfg = Config()
         cfg.dedupe_equivalent_candidates = True
         cfg.lookup_stop_at_first_match = False
-        cfg.gnudb.host = "gnudb.gnudb.org"
         with patch(
-            "discvault.metadata.gnudb.lookup_http",
-            return_value=[self._gnudb_record("GnuDB")],
+            "discvault.metadata.musicbrainz.lookup",
+            return_value=[self._record("MusicBrainz")],
         ), patch(
-            "discvault.metadata.gnudb.lookup_cddbp",
-            return_value=[self._gnudb_record("GnuDB-CDDBP")],
+            "discvault.metadata.gnudb.lookup_http",
+            return_value=[self._record("GnuDB")],
         ):
             results = fetch_candidates(
                 self._disc_info(),
                 cfg,
-                sources={"cdtext": False, "musicbrainz": False, "gnudb": True},
-                source_order=["gnudb"],
+                sources={"cdtext": False, "musicbrainz": True, "gnudb": True},
+                source_order=["musicbrainz", "gnudb"],
             )
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].source, "GnuDB")
+        self.assertEqual(results[0].source, "MusicBrainz")
 
-    def test_dedupe_off_keeps_both_protocol_records(self) -> None:
+    def test_dedupe_off_keeps_equivalent_cross_provider_records(self) -> None:
         cfg = Config()
         cfg.dedupe_equivalent_candidates = False
         cfg.lookup_stop_at_first_match = False
-        cfg.gnudb.host = "gnudb.gnudb.org"
         with patch(
-            "discvault.metadata.gnudb.lookup_http",
-            return_value=[self._gnudb_record("GnuDB")],
+            "discvault.metadata.musicbrainz.lookup",
+            return_value=[self._record("MusicBrainz")],
         ), patch(
-            "discvault.metadata.gnudb.lookup_cddbp",
-            return_value=[self._gnudb_record("GnuDB-CDDBP")],
+            "discvault.metadata.gnudb.lookup_http",
+            return_value=[self._record("GnuDB")],
         ):
             results = fetch_candidates(
                 self._disc_info(),
                 cfg,
-                sources={"cdtext": False, "musicbrainz": False, "gnudb": True},
-                source_order=["gnudb"],
+                sources={"cdtext": False, "musicbrainz": True, "gnudb": True},
+                source_order=["musicbrainz", "gnudb"],
             )
-        self.assertEqual([m.source for m in results], ["GnuDB", "GnuDB-CDDBP"])
+        self.assertEqual([m.source for m in results], ["MusicBrainz", "GnuDB"])
 
 
 class BlankRedundantTrackArtistsConfigTests(unittest.TestCase):

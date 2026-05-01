@@ -1,7 +1,6 @@
-"""GnuDB metadata providers: HTTP and CDDBP."""
+"""GnuDB HTTP CGI metadata provider."""
 from __future__ import annotations
 
-import socket
 import requests
 from .types import DiscInfo, Metadata, Track
 from .sanitize import trim, is_gnudb_compat_warning
@@ -41,35 +40,6 @@ def lookup_http(
             if meta and meta not in results:
                 results.append(meta)
                 return results  # one result per source is enough
-    return results
-
-
-def lookup_cddbp(
-    disc_info: DiscInfo,
-    hello_values: list[str],
-    host: str,
-    port: int,
-    timeout: int = 15,
-    cache_enabled: bool = False,
-    debug: bool = False,
-) -> list[Metadata]:
-    """Query GnuDB via CDDBP TCP protocol."""
-    if not disc_info.freedb_disc_id:
-        return []
-    results: list[Metadata] = []
-    for hello in hello_values:
-        meta = _cddbp_query_and_read(
-            disc_info,
-            hello,
-            host,
-            port,
-            timeout,
-            cache_enabled,
-            debug,
-        )
-        if meta and meta not in results:
-            results.append(meta)
-            return results  # one result per source is enough
     return results
 
 
@@ -147,93 +117,6 @@ def _http_query_and_read(
     return meta
 
 
-# ---------------------------------------------------------------------------
-# CDDBP implementation
-# ---------------------------------------------------------------------------
-
-def _cddbp_query_and_read(
-    disc_info: DiscInfo,
-    hello: str,
-    host: str,
-    port: int,
-    timeout: int,
-    cache_enabled: bool,
-    debug: bool,
-) -> Metadata | None:
-    cmd_query = (
-        f"cddb query {disc_info.freedb_disc_id} {disc_info.track_count} "
-        f"{disc_info.freedb_offset_string} {disc_info.freedb_total_seconds}"
-    )
-    commands = [
-        f"cddb hello {hello}",
-        "proto 6",
-        cmd_query,
-        "quit",
-    ]
-    try:
-        response = _cddbp_exchange(host, port, commands, timeout)
-    except Exception as exc:
-        if debug:
-            print(f"[metadata-debug] GnuDB CDDBP query failed ({host}:{port}): {exc}")
-        return None
-
-    if is_gnudb_compat_warning(response):
-        if debug:
-            print(f"[metadata-debug] GnuDB CDDBP compat warning ({host}:{port})")
-        return None
-
-    # Find the 4th status line (banner, hello resp, proto resp, query resp)
-    status_lines = [ln for ln in response.splitlines() if len(ln) >= 3 and ln[:3].isdigit()]
-    if len(status_lines) < 4:
-        if debug:
-            print(f"[metadata-debug] GnuDB CDDBP query: unexpected response ({host}:{port})")
-        return None
-
-    query_status_line = status_lines[3]
-    category, disc_id = _parse_cddbp_status(query_status_line, response, status_lines[3])
-    if not category or not disc_id:
-        return None
-
-    read_commands = [
-        f"cddb hello {hello}",
-        "proto 6",
-        f"cddb read {category} {disc_id}",
-        "quit",
-    ]
-    try:
-        read_response = _cddbp_exchange(host, port, read_commands, timeout)
-    except Exception as exc:
-        if debug:
-            print(f"[metadata-debug] GnuDB CDDBP read failed ({host}:{port}): {exc}")
-        return None
-
-    if is_gnudb_compat_warning(read_response):
-        return None
-
-    read_status_lines = [
-        ln for ln in read_response.splitlines() if len(ln) >= 3 and ln[:3].isdigit()
-    ]
-    if len(read_status_lines) < 4:
-        return None
-
-    read_code = read_status_lines[3][:3]
-    if read_code not in ("210", "215"):
-        return None
-
-    # Find the data lines after the status line
-    all_lines = read_response.splitlines()
-    status_idx = next(
-        (i for i, ln in enumerate(all_lines) if ln == read_status_lines[3]), None
-    )
-    if status_idx is None:
-        return None
-    record_text = "\n".join(all_lines[status_idx + 1 :])
-    meta = parse_cddb_record(record_text, source="GnuDB-CDDBP")
-    if meta and cache_enabled:
-        _save_cache_record(disc_id, category, record_text, debug)
-    return meta
-
-
 def _save_cache_record(disc_id: str, category: str, record_text: str, debug: bool) -> None:
     from . import local
 
@@ -242,75 +125,6 @@ def _save_cache_record(disc_id: str, category: str, record_text: str, debug: boo
     except OSError as exc:
         if debug:
             print(f"[metadata-debug] Local CDDB cache save failed ({category}/{disc_id}): {exc}")
-
-
-def _cddbp_exchange(host: str, port: int, commands: list[str], timeout: float) -> str:
-    """Open a TCP connection and run each CDDBP command in turn.
-
-    Some servers (notably gnudb.gnudb.org) reject pipelined commands with
-    "500 Command syntax error", so commands must be sent one at a time and
-    the response read before the next is sent.
-    """
-    with socket.create_connection((host, port), timeout=timeout) as s:
-        s.settimeout(timeout)
-        data = b""
-        # Read banner (single line)
-        while b"\n" not in data:
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-
-        # Send each command and read its response before sending the next.
-        for cmd in commands:
-            try:
-                s.sendall(cmd.encode() + b"\r\n")
-            except OSError:
-                break
-            offset = len(data)
-            try:
-                data = _cddbp_read_response(s, data, offset)
-            except (socket.timeout, OSError):
-                break
-            if cmd.strip().lower() == "quit":
-                break
-    return data.decode(errors="replace").replace("\r\n", "\n")
-
-
-def _cddbp_read_response(s: socket.socket, buffer: bytes, offset: int) -> bytes:
-    """Read one complete CDDBP response starting at ``offset`` in ``buffer``.
-
-    Single-line responses (most status codes) end at the first ``\\r\\n``
-    after ``offset``. Multi-line responses (codes ``210``, ``211``, ``212``)
-    end at a line containing only ``.`` per the CDDBP spec.
-    """
-    # Wait for the first line to arrive
-    while b"\n" not in buffer[offset:]:
-        chunk = s.recv(4096)
-        if not chunk:
-            return buffer
-        buffer += chunk
-
-    first_line_end_rel = buffer[offset:].index(b"\n")
-    first_line = buffer[offset:offset + first_line_end_rel].rstrip(b"\r")
-
-    is_multi_line = (
-        len(first_line) >= 3
-        and first_line[:3].isdigit()
-        and first_line[:3] in (b"210", b"211", b"212")
-    )
-    if not is_multi_line:
-        return buffer
-
-    # Multi-line: wait for the terminating "." line.
-    while True:
-        rest = buffer[offset + first_line_end_rel:]
-        if b"\r\n.\r\n" in rest or b"\n.\n" in rest:
-            return buffer
-        chunk = s.recv(4096)
-        if not chunk:
-            return buffer
-        buffer += chunk
 
 
 def _parse_query_response(text: str) -> tuple[str, str]:
@@ -335,34 +149,8 @@ def _parse_query_response(text: str) -> tuple[str, str]:
     return "", ""
 
 
-def _parse_cddbp_status(status_line: str, full_response: str, _: str) -> tuple[str, str]:
-    """Parse CDDBP query status line for category and disc_id."""
-    parts = status_line.split()
-    if not parts:
-        return "", ""
-    code = parts[0]
-    if code == "200" and len(parts) >= 3:
-        return parts[1], parts[2]
-    if code in ("210", "211"):
-        # Next non-dot line after this status line
-        lines = full_response.splitlines()
-        found = False
-        for line in lines:
-            if line == status_line:
-                found = True
-                continue
-            if found:
-                line = line.strip()
-                if line == ".":
-                    break
-                lparts = line.split()
-                if len(lparts) >= 2:
-                    return lparts[0], lparts[1]
-    return "", ""
-
-
 # ---------------------------------------------------------------------------
-# CDDB record parser (shared by HTTP and CDDBP)
+# CDDB record parser
 # ---------------------------------------------------------------------------
 
 def parse_cddb_record(text: str, source: str = "GnuDB") -> Metadata | None:

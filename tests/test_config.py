@@ -30,7 +30,6 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.metadata_timeout, config_mod.Config().metadata_timeout)
         self.assertEqual(cfg.cdparanoia_sample_offset, 0)
-        self.assertEqual(cfg.gnudb.port, config_mod.GnudbConfig().port)
         self.assertTrue(cfg.accuraterip_enabled)
 
     def test_save_escapes_string_values(self) -> None:

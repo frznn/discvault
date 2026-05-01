@@ -873,7 +873,6 @@ class TuiHelpersTests(unittest.TestCase):
 
     def test_run_meta_fetch_reports_gnudb_hint_when_configured_but_disabled(self) -> None:
         cfg = Config()
-        cfg.gnudb.host = "gnudb.gnudb.org"
         args = Namespace(
             tracks=None,
             metadata_file=None,
@@ -912,7 +911,7 @@ class TuiHelpersTests(unittest.TestCase):
             )
 
         logged = "\n".join(call.args[0] for call in tlog.call_args_list if call.args)
-        self.assertIn("GnuDB is configured but disabled", logged)
+        self.assertIn("GnuDB is disabled in", logged)
 
     def test_target_button_destination_uses_library_when_target_missing(self) -> None:
         with TemporaryDirectory() as tmpdir:

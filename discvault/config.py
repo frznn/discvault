@@ -29,8 +29,6 @@ LOG_FILE_PATH = Path.home() / ".cache" / "discvault" / "last-run.log"
 
 @dataclass
 class GnudbConfig:
-    host: str = ""  # CDDBP disabled by default; set to "gnudb.gnudb.org" to enable
-    port: int = 8880
     hello_user: str = ""
     hello_program: str = "discvault"
     hello_version: str = "1.0"
@@ -194,8 +192,6 @@ class Config:
         cfg.aac_bitrate = max(96, _as_int(dv.get("aac_bitrate"), cfg.aac_bitrate))
 
         gn = data.get("gnudb", {})
-        cfg.gnudb.host = _as_str(gn.get("host"), cfg.gnudb.host)
-        cfg.gnudb.port = max(1, _as_int(gn.get("port"), cfg.gnudb.port))
         cfg.gnudb.hello_user = _as_str(gn.get("hello_user"), cfg.gnudb.hello_user)
         cfg.gnudb.hello_program = _as_str(
             gn.get("hello_program"), cfg.gnudb.hello_program
@@ -245,8 +241,6 @@ class Config:
             f"aac_bitrate = {self.aac_bitrate}",
             "",
             "[gnudb]",
-            f"host = {_toml_string(self.gnudb.host)}",
-            f"port = {self.gnudb.port}",
             f"hello_user = {_toml_string(self.gnudb.hello_user)}",
             f"hello_program = {_toml_string(self.gnudb.hello_program)}",
             f"hello_version = {_toml_string(self.gnudb.hello_version)}",

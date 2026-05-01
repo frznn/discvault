@@ -232,9 +232,8 @@ def fetch_candidates(
                 hello_values = gnudb.build_hello_values(
                     cfg.gnudb.hello_user, cfg.gnudb.hello_program, cfg.gnudb.hello_version
                 )[:1]
-                http_before = len(results)
                 _run(
-                    "GnuDB HTTP",
+                    "GnuDB",
                     lambda hv=hello_values: gnudb.lookup_http(
                         disc_info,
                         hv,
@@ -243,20 +242,6 @@ def fetch_candidates(
                         debug=debug,
                     ),
                 )
-                http_hit = len(results) > http_before
-                if cfg.gnudb.host and not (short_circuit and http_hit):
-                    _run(
-                        f"GnuDB CDDBP ({cfg.gnudb.host})",
-                        lambda hv=hello_values: gnudb.lookup_cddbp(
-                            disc_info,
-                            hv,
-                            host=cfg.gnudb.host,
-                            port=cfg.gnudb.port,
-                            timeout=cfg.metadata_timeout,
-                            cache_enabled=cfg.use_local_cddb_cache,
-                            debug=debug,
-                        ),
-                    )
             else:
                 _skip("GnuDB", "no FreeDB disc ID")
 

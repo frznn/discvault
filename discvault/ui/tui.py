@@ -1376,10 +1376,10 @@ class DiscvaultApp(App[None]):
                 f"[green]✓[/green] Found [bold]{len(candidates)}[/bold] metadata candidate(s)."
             )
         else:
-            if not use_gnudb and cfg.gnudb.host.strip():
+            if not use_gnudb:
                 self._tlog(
                     "[yellow]![/yellow] No metadata found from the selected sources. "
-                    "GnuDB is configured but disabled in [bold]Sources[/bold]; enable it and search again."
+                    "GnuDB is disabled in [bold]Sources[/bold]; enable it and search again."
                 )
             if manual_search:
                 self._tlog(
