@@ -1491,12 +1491,13 @@ class DiscvaultApp(App[None]):
         self._sync_track_selection()
         table = self.query_one("#meta-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("#", "Source", "Artist", "Album", "Year", "Tracks")
+        table.add_columns("#", "Source", "Artist", "Album", "First release", "Year", "Tracks")
         for i, m in enumerate(self._candidates, 1):
             self._ensure_meta_tracks(m)
             table.add_row(
                 str(i), m.source,
                 m.album_artist or "(unknown)", m.album or "(untitled)",
+                m.first_release_year or "—",
                 m.year or "—", str(m.track_count),
             )
         if self._candidates:
@@ -1556,6 +1557,12 @@ class DiscvaultApp(App[None]):
             self._auto_import_url_pending = False
             self.set_timer(0, lambda: self._start_import_from_value("url", self._metadata_url))
 
+    def _year_for_input(self, m: "Metadata") -> str:
+        """Pick which year populates ``#input-year`` for a candidate."""
+        if self._cfg.prefer_first_release_year and m.first_release_year:
+            return m.first_release_year
+        return m.year or ""
+
     def _apply_candidate(self, idx: int) -> None:
         if not self._candidates or idx >= len(self._candidates):
             return
@@ -1566,7 +1573,7 @@ class DiscvaultApp(App[None]):
         if not self._args.album:
             self.query_one("#input-album", Input).value = m.album or ""
         if not self._args.year:
-            self.query_one("#input-year", Input).value = m.year or ""
+            self.query_one("#input-year", Input).value = self._year_for_input(m)
 
         self._render_track_editor(m)
 

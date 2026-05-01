@@ -1106,5 +1106,60 @@ class TuiHelpersTests(unittest.TestCase):
         self.assertEqual(app._possible_extra_tracks(meta), [13])
 
 
+class YearForInputTests(unittest.TestCase):
+    def _app(self, *, prefer_first: bool) -> DiscvaultApp:
+        cfg = Config()
+        cfg.prefer_first_release_year = prefer_first
+        args = Namespace(
+            tracks=None, metadata_file=None, metadata_url=None,
+            mp3_bitrate=320, mp3_quality=2, flac_compression=8,
+            no_image=False, no_flac=False, no_mp3=False, ogg=False,
+            opus=False, alac=False, aac=False, wav=False, iso=False,
+            artist=None, album=None, year=None,
+        )
+        return DiscvaultApp(args, cfg)
+
+    def _meta(self, *, year: str = "", first: str = "") -> Metadata:
+        return Metadata(
+            source="X",
+            album_artist="Artist",
+            album="Album",
+            year=year,
+            first_release_year=first,
+        )
+
+    def test_prefer_first_with_both_years_returns_first(self) -> None:
+        app = self._app(prefer_first=True)
+        self.assertEqual(app._year_for_input(self._meta(year="2006", first="1969")), "1969")
+
+    def test_prefer_first_with_only_pressing_year_returns_pressing(self) -> None:
+        app = self._app(prefer_first=True)
+        self.assertEqual(app._year_for_input(self._meta(year="2006")), "2006")
+
+    def test_prefer_first_with_only_first_year_returns_first(self) -> None:
+        app = self._app(prefer_first=True)
+        self.assertEqual(app._year_for_input(self._meta(first="1969")), "1969")
+
+    def test_prefer_off_returns_pressing_year_even_when_first_is_set(self) -> None:
+        app = self._app(prefer_first=False)
+        self.assertEqual(app._year_for_input(self._meta(year="2006", first="1969")), "2006")
+
+    def test_prefer_off_with_no_pressing_year_returns_empty_string(self) -> None:
+        app = self._app(prefer_first=False)
+        self.assertEqual(app._year_for_input(self._meta(first="1969")), "")
+
+
+class CandidateTableColumnsTests(unittest.TestCase):
+    def test_table_includes_first_release_column(self) -> None:
+        # Source-level invariant: the candidate table headers list `First release`
+        # between `Album` and `Year`. Verifying the source is enough; rendering
+        # requires an active Textual App and is exercised manually.
+        source = inspect.getsource(DiscvaultApp._enter_ready)
+        self.assertIn(
+            '"#", "Source", "Artist", "Album", "First release", "Year", "Tracks"',
+            source,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

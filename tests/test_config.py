@@ -190,6 +190,36 @@ class ConfigTests(unittest.TestCase):
 
         self.assertTrue(cfg.dedupe_equivalent_candidates)
 
+    def test_prefer_first_release_year_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config()
+                cfg.prefer_first_release_year = False
+                cfg.save()
+                loaded = config_mod.Config.load()
+                saved_text = config_path.read_text()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertFalse(loaded.prefer_first_release_year)
+        self.assertIn("prefer_first_release_year = false", saved_text)
+
+    def test_prefer_first_release_year_defaults_to_true_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text("[discvault]\n")
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config.load()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertTrue(cfg.prefer_first_release_year)
+
     def test_lookup_log_timings_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"

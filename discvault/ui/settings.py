@@ -188,6 +188,11 @@ class ConfigScreen(ModalScreen[Config | None]):
                     "cfg-dedupe-equivalent",
                     self._cfg.dedupe_equivalent_candidates,
                 ),
+                (
+                    "Prefer first-release year",
+                    "cfg-prefer-first-release-year",
+                    self._cfg.prefer_first_release_year,
+                ),
             ),
 
             Static("Logging", classes="cfg-section-header"),
@@ -298,6 +303,7 @@ class ConfigScreen(ModalScreen[Config | None]):
         cfg.log_to_file = self._check("cfg-log-to-file")
         cfg.blank_redundant_track_artist = self._check("cfg-blank-redundant-artists")
         cfg.dedupe_equivalent_candidates = self._check("cfg-dedupe-equivalent")
+        cfg.prefer_first_release_year = self._check("cfg-prefer-first-release-year")
         completion_sound = self.query_one("#cfg-completion-sound", Select).value
         if completion_sound in {"bell", "chime", "both", "off"}:
             cfg.completion_sound = completion_sound
