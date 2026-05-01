@@ -15,6 +15,7 @@ class Metadata:
     album_artist: str
     album: str
     year: str = ""
+    first_release_year: str = ""
     tracks: list[Track] = field(default_factory=list)
     cover_art_url: str = ""
     cover_art_ext: str = ""

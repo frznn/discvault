@@ -76,13 +76,16 @@ def lookup(
         master_id = items[0].get("id")
         if not isinstance(master_id, int):
             continue
-        release_id = _master_main_release_id(
+        resolved = _master_main_release_id(
             master_id,
             headers=headers,
             timeout=timeout,
             debug=debug,
         )
-        if release_id is None or release_id in seen_ids:
+        if resolved is None:
+            continue
+        release_id, first_release_year = resolved
+        if release_id in seen_ids:
             continue
         meta = _fetch_release(
             release_id,
@@ -91,6 +94,7 @@ def lookup(
             timeout=timeout,
             debug=debug,
             allow_inexact_track_count=True,
+            first_release_year=first_release_year,
         )
         if meta is None:
             continue
@@ -278,15 +282,17 @@ def lookup_url(
     if token:
         headers["Authorization"] = f"Discogs token={token}"
 
+    first_release_year = ""
     if kind == "master":
-        release_id = _master_main_release_id(
+        resolved = _master_main_release_id(
             discogs_id,
             headers=headers,
             timeout=timeout,
             debug=debug,
         )
-        if release_id is None:
+        if resolved is None:
             return []
+        release_id, first_release_year = resolved
     else:
         release_id = discogs_id
 
@@ -297,6 +303,7 @@ def lookup_url(
         timeout=timeout,
         debug=debug,
         allow_inexact_track_count=True,
+        first_release_year=first_release_year,
     )
     return [meta] if meta else []
 
@@ -336,7 +343,8 @@ def _master_main_release_id(
     headers: dict[str, str],
     timeout: int,
     debug: bool,
-) -> int | None:
+) -> tuple[int, str] | None:
+    """Return ``(main_release_id, master_year)`` for a master, or None."""
     try:
         resp = requests.get(
             f"{_API_BASE}/masters/{master_id}",
@@ -351,11 +359,14 @@ def _master_main_release_id(
         return None
 
     main_release = data.get("main_release")
-    if isinstance(main_release, int) and main_release > 0:
-        return main_release
-    if debug:
-        print(f"[metadata-debug] Discogs master {master_id} has no main_release; paste a specific release URL")
-    return None
+    if not isinstance(main_release, int) or main_release <= 0:
+        if debug:
+            print(f"[metadata-debug] Discogs master {master_id} has no main_release; paste a specific release URL")
+        return None
+
+    year_raw = str(data.get("year", "")).strip()
+    master_year = year_raw if year_raw.isdigit() and len(year_raw) == 4 else ""
+    return main_release, master_year
 
 
 def _fetch_release(
@@ -366,6 +377,7 @@ def _fetch_release(
     timeout: int,
     debug: bool,
     allow_inexact_track_count: bool,
+    first_release_year: str = "",
 ) -> Metadata | None:
     try:
         resp = requests.get(
@@ -408,6 +420,7 @@ def _fetch_release(
         album_artist=album_artist,
         album=album,
         year=year,
+        first_release_year=first_release_year,
         tracks=tracks,
         cover_art_url=cover_art_url,
         discogs_release_id=release_id,

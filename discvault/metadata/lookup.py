@@ -261,6 +261,7 @@ def _metadata_equivalent(a: Metadata, b: Metadata) -> bool:
         a.album_artist == b.album_artist
         and a.album == b.album
         and a.year == b.year
+        and a.first_release_year == b.first_release_year
         and a.tracks == b.tracks
         and a.cover_art_url == b.cover_art_url
         and a.cover_art_ext == b.cover_art_ext

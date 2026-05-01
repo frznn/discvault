@@ -226,5 +226,47 @@ class MusicBrainzTests(unittest.TestCase):
         self.assertNotIn(" o ", query)
 
 
+class FirstReleaseYearTests(unittest.TestCase):
+    def test_release_to_candidate_picks_up_first_release_date(self) -> None:
+        from discvault.metadata.musicbrainz import _release_to_candidate
+
+        disc_info = DiscInfo(device="/dev/cdrom", track_count=1)
+        release = {
+            "id": "release-1",
+            "title": "Willy and the Poor Boys",
+            "date": "2006-09-25",
+            "artist-credit": [{"name": "Creedence Clearwater Revival"}],
+            "release-group": {"id": "group-1", "first-release-date": "1969-11"},
+            "media": [
+                {"track-count": 1, "tracks": [{"number": "1", "title": "Down on the Corner"}]}
+            ],
+        }
+        result = _release_to_candidate(release, disc_info, debug=False, match_quality="disc_id")
+        self.assertIsNotNone(result)
+        meta, _ = result  # type: ignore[misc]
+        self.assertEqual(meta.year, "2006")
+        self.assertEqual(meta.first_release_year, "1969")
+
+    def test_release_to_candidate_leaves_first_release_year_empty_when_missing(self) -> None:
+        from discvault.metadata.musicbrainz import _release_to_candidate
+
+        disc_info = DiscInfo(device="/dev/cdrom", track_count=1)
+        release = {
+            "id": "release-1",
+            "title": "Album",
+            "date": "1969",
+            "artist-credit": [{"name": "Artist"}],
+            "release-group": {"id": "group-1"},
+            "media": [
+                {"track-count": 1, "tracks": [{"number": "1", "title": "One"}]}
+            ],
+        }
+        result = _release_to_candidate(release, disc_info, debug=False, match_quality="disc_id")
+        self.assertIsNotNone(result)
+        meta, _ = result  # type: ignore[misc]
+        self.assertEqual(meta.year, "1969")
+        self.assertEqual(meta.first_release_year, "")
+
+
 if __name__ == "__main__":
     unittest.main()

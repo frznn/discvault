@@ -19,11 +19,11 @@ class DiscogsTests(unittest.TestCase):
         disc_info = DiscInfo(device="/dev/cdrom", track_count=2)
 
         master_search = self._response({"results": [{"id": 55269, "type": "master"}]})
-        master_detail = self._response({"id": 55269, "main_release": 7777})
+        master_detail = self._response({"id": 55269, "main_release": 7777, "year": 1969})
         master_release = self._response({
             "artists": [{"name": "Creedence Clearwater Revival"}],
             "title": "Bayou Country (Master)",
-            "year": 1969,
+            "year": 2006,
             "tracklist": [
                 {"type_": "track", "title": "Born on the Bayou"},
                 {"type_": "track", "title": "Bootleg"},
@@ -60,8 +60,10 @@ class DiscogsTests(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0].album, "Bayou Country (Master)")
         self.assertEqual(results[0].discogs_release_id, 7777)
+        self.assertEqual(results[0].first_release_year, "1969")
         self.assertEqual(results[1].album, "Bayou Country (UK pressing)")
         self.assertEqual(results[1].discogs_release_id, 8888)
+        self.assertEqual(results[1].first_release_year, "")
 
         first_call = get.call_args_list[0]
         self.assertEqual(first_call.kwargs["params"]["type"], "master")
@@ -173,6 +175,7 @@ class DiscogsUrlTests(unittest.TestCase):
         self.assertEqual(meta.album, "Album")
         self.assertEqual(meta.discogs_release_id, 999)
         self.assertEqual(meta.track_count, 2)
+        self.assertEqual(meta.first_release_year, "")
         get.assert_called_once()
         called_url = get.call_args.args[0]
         self.assertIn("/releases/999", called_url)
@@ -187,11 +190,11 @@ class DiscogsUrlTests(unittest.TestCase):
 
     def test_lookup_url_resolves_master_to_main_release(self) -> None:
         disc_info = DiscInfo(device="/dev/cdrom", track_count=2)
-        master_payload = {"id": 55269, "main_release": 7777}
+        master_payload = {"id": 55269, "main_release": 7777, "year": 1969}
         release_payload = {
             "artists": [{"name": "Creedence Clearwater Revival"}],
             "title": "Bayou Country",
-            "year": 1969,
+            "year": 2006,
             "tracklist": [
                 {"type_": "track", "title": "Born on the Bayou"},
                 {"type_": "track", "title": "Bootleg"},
@@ -217,6 +220,8 @@ class DiscogsUrlTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].discogs_release_id, 7777)
         self.assertEqual(results[0].album, "Bayou Country")
+        self.assertEqual(results[0].year, "2006")
+        self.assertEqual(results[0].first_release_year, "1969")
         self.assertEqual(get.call_args_list[0].args[0], f"{discogs._API_BASE}/masters/55269")
         self.assertEqual(get.call_args_list[1].args[0], f"{discogs._API_BASE}/releases/7777")
 

@@ -270,12 +270,12 @@ def _metadata_from_release_medium(
 ) -> Metadata | None:
     album_artist = trim(_ac_name(release.get("artist-credit")))
     album = trim(release.get("title", ""))
-    year = ""
-    date = release.get("date", "")
-    if date:
-        year = date.split("-")[0]
-        if not year.isdigit() or len(year) != 4:
-            year = ""
+    year = _year_from_date(release.get("date", ""))
+
+    first_release_year = ""
+    rg = release.get("release-group")
+    if isinstance(rg, dict):
+        first_release_year = _year_from_date(rg.get("first-release-date", ""))
 
     tracks: list[Track] = []
     for t in medium.get("tracks", []):
@@ -296,6 +296,7 @@ def _metadata_from_release_medium(
         album_artist=album_artist,
         album=album,
         year=year,
+        first_release_year=first_release_year,
         tracks=tracks,
         mb_release_id=str(release.get("id", "") or ""),
         mb_release_group_id=str(
@@ -305,6 +306,14 @@ def _metadata_from_release_medium(
         ),
         match_quality=match_quality,
     )
+
+
+def _year_from_date(date: str | None) -> str:
+    """Extract a 4-digit year from a MusicBrainz date string ("YYYY", "YYYY-MM", "YYYY-MM-DD")."""
+    if not date:
+        return ""
+    head = str(date).split("-", 1)[0]
+    return head if head.isdigit() and len(head) == 4 else ""
 
 
 def _search_queries(*, query: str, artist: str, album: str, year: str) -> list[str]:
