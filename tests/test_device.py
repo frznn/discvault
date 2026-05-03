@@ -32,6 +32,23 @@ class DeviceTests(unittest.TestCase):
             self.assertTrue(device_mod.is_readable("/dev/cdrom"))
         run.assert_called_once()
 
+    def test_list_available_returns_only_present_candidates(self) -> None:
+        present = {"/dev/sr0", "/dev/sr1"}
+
+        def fake_block(self) -> bool:
+            return str(self) in present
+
+        with patch("discvault.device.Path.is_block_device", fake_block), \
+             patch("discvault.device.Path.is_symlink", return_value=False):
+            result = device_mod.list_available()
+
+        self.assertEqual(result, ["/dev/sr0", "/dev/sr1"])
+
+    def test_list_available_returns_empty_when_no_candidates(self) -> None:
+        with patch("discvault.device.Path.is_block_device", return_value=False), \
+             patch("discvault.device.Path.is_symlink", return_value=False):
+            self.assertEqual(device_mod.list_available(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

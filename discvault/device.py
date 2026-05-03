@@ -34,6 +34,16 @@ def detect() -> str | None:
     return None
 
 
+def list_available() -> list[str]:
+    """Return every currently-present CD block device from the standard candidates."""
+    found: list[str] = []
+    for candidate in _CANDIDATES:
+        p = Path(candidate)
+        if p.is_block_device() or p.is_symlink():
+            found.append(candidate)
+    return found
+
+
 def drive_status(device: str) -> str:
     """Return tray/media status without forcing a full disc read when supported."""
     if fcntl is None:

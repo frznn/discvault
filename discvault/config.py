@@ -52,6 +52,7 @@ DEFAULT_METADATA_SOURCE_ORDER: list[str] = ["musicbrainz", "gnudb", "cdtext"]
 class Config:
     base_dir: str = _DEFAULT_BASE_DIR
     work_dir: str = _DEFAULT_WORK_DIR
+    device: str = ""  # empty = auto-detect via device.detect()
     cdrdao_command: str = DEFAULT_CDRDAO_COMMAND
     image_ripper: str = "cdrdao"  # cdrdao | readom
     keep_wav: bool = False
@@ -104,6 +105,7 @@ class Config:
         dv = data.get("discvault", {})
         cfg.base_dir = _as_str(dv.get("base_dir"), cfg.base_dir)
         cfg.work_dir = _as_str(dv.get("work_dir"), cfg.work_dir)
+        cfg.device = _as_str(dv.get("device"), cfg.device)
         # Migrate legacy cdrdao_driver + cdrdao_read_raw → cdrdao_command
         if "cdrdao_command" in dv:
             cfg.cdrdao_command = _as_str(dv["cdrdao_command"], cfg.cdrdao_command)
@@ -220,6 +222,7 @@ class Config:
             "[discvault]",
             f"base_dir = {_toml_string(self.base_dir)}",
             f"work_dir = {_toml_string(self.work_dir)}",
+            f"device = {_toml_string(self.device)}",
             f"cdrdao_command = {_toml_string(self.cdrdao_command)}",
             f"image_ripper = {_toml_string(self.image_ripper)}",
             f"keep_wav = {str(self.keep_wav).lower()}",

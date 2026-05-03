@@ -7,6 +7,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label, Select, Static
 
 from ..config import Config, DEFAULT_CDRDAO_COMMAND
+from .. import device as dev_mod
 
 
 class ConfigScreen(ModalScreen[Config | None]):
@@ -113,6 +114,7 @@ class ConfigScreen(ModalScreen[Config | None]):
             self._input_row("Work dir", "cfg-work-dir", self._cfg.work_dir),
 
             Static("Rip behavior", classes="cfg-section-header"),
+            self._device_row(),
             self._select_row(
                 "Image ripper",
                 "cfg-image-ripper",
@@ -260,6 +262,22 @@ class ConfigScreen(ModalScreen[Config | None]):
             classes="cfg-row",
         )
 
+    _AUTO_DEVICE_VALUE = "<auto>"
+
+    def _device_row(self) -> Horizontal:
+        present = dev_mod.list_available()
+        # Always include the saved device so a hot-unplugged drive doesn't lose its preference.
+        if self._cfg.device and self._cfg.device not in present:
+            present.append(self._cfg.device)
+        options: list[tuple[str, str]] = [("Auto-detect", self._AUTO_DEVICE_VALUE)]
+        options.extend((path, path) for path in present)
+        value = self._cfg.device or self._AUTO_DEVICE_VALUE
+        return Horizontal(
+            Label("Device", classes="cfg-label"),
+            Select(options, value=value, id="cfg-device", compact=True, allow_blank=False),
+            classes="cfg-row",
+        )
+
     def on_mount(self) -> None:
         self.query_one("#cfg-base-dir", Input).focus()
 
@@ -284,6 +302,8 @@ class ConfigScreen(ModalScreen[Config | None]):
         cfg = self._cfg.clone()
         cfg.base_dir = self._input("cfg-base-dir")
         cfg.work_dir = self._input("cfg-work-dir")
+        device_val = self.query_one("#cfg-device", Select).value
+        cfg.device = "" if device_val == self._AUTO_DEVICE_VALUE else str(device_val)
         image_ripper_val = self.query_one("#cfg-image-ripper", Select).value
         if image_ripper_val in {"cdrdao", "readom"}:
             cfg.image_ripper = image_ripper_val

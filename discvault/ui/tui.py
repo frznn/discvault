@@ -1007,7 +1007,12 @@ class DiscvaultApp(App[None]):
     def _resolve_device(self) -> str | None:
         from .. import device as dev_mod
 
-        return self._args.device or (self._disc_info.device if self._disc_info else None) or dev_mod.detect()
+        return (
+            self._args.device
+            or (self._disc_info.device if self._disc_info else None)
+            or self._cfg.device
+            or dev_mod.detect()
+        )
 
     def _target_dir_value(self) -> str:
         """Return the raw value typed in the target directory input."""
@@ -1224,7 +1229,7 @@ class DiscvaultApp(App[None]):
         from .. import device as dev_mod, disc as disc_mod
 
         self._tlog("> Detecting CD device...")
-        device = self._args.device or dev_mod.detect()
+        device = self._args.device or self._cfg.device or dev_mod.detect()
         if not device:
             self._tlog("[bold red]✗ No CD device found. Use --device to specify one.[/bold red]")
             self._tlog("[dim]Insert a disc and restart, or pass --device /dev/srN.[/dim]")
@@ -2786,7 +2791,7 @@ class DiscvaultApp(App[None]):
         try:
             if self._shutting_down:
                 return
-            device = self._args.device or (self._disc_info.device if self._disc_info else None) or dev_mod.detect()
+            device = self._args.device or (self._disc_info.device if self._disc_info else None) or self._cfg.device or dev_mod.detect()
             if not device:
                 if not self._shutting_down:
                     self.call_from_thread(self._mark_disc_absent)

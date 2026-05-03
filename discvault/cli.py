@@ -131,7 +131,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
     # 1. Device
     # ------------------------------------------------------------------
     step("Detecting CD device")
-    device = args.device or dev_mod.detect()
+    device = args.device or cfg.device or dev_mod.detect()
     if not device:
         error("No CD device found. Use --device to specify one.")
         sys.exit(1)
