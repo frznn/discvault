@@ -573,9 +573,6 @@ class DiscvaultApp(App[None]):
                             yield Button("Manual Search", id="btn-more", disabled=True)
                             yield Button("Import", id="btn-import", disabled=True)
                             yield Button("Manual Entry", id="btn-manual", disabled=True)
-                            with Horizontal(id="metadata-actions-right"):
-                                yield Checkbox("Download Cover Art", id="chk-cover-art", compact=True, disabled=True)
-                                yield Label("", id="cover-art-source", classes="cover-art-source-lbl")
 
                 # Ready phase: tag inputs
                 with Horizontal(id="tags-row"):
@@ -591,6 +588,12 @@ class DiscvaultApp(App[None]):
                     yield Vertical(id="tracklist-section")
 
                 yield Static("", id="extras-notice", markup=True)
+
+                with Horizontal(id="cover-art-row"):
+                    yield Checkbox("Download Cover Art", id="chk-cover-art", compact=True, disabled=True)
+                    yield Label("", id="cover-art-source", classes="cover-art-source-lbl")
+                    yield Button("Search…", id="btn-cover-search", compact=True, disabled=True)
+                    yield Button("View", id="btn-cover-view", compact=True, disabled=True)
 
                 with Horizontal(id="target-row"):
                     yield Label("Destination", classes="tag-lbl")
@@ -1618,6 +1621,7 @@ class DiscvaultApp(App[None]):
             "tracklist-scroll",
             "extras-notice",
             "tags-row",
+            "cover-art-row",
             "target-row",
         ):
             self._show(section)
@@ -1725,13 +1729,142 @@ class DiscvaultApp(App[None]):
         checkbox = self.query_one("#chk-cover-art", Checkbox)
         checkbox.disabled = not available
         checkbox.value = self._cover_art_selected if available else False
-        if not available:
-            source_text = "unavailable"
-        elif meta.cover_art_url:
-            source_text = meta.source or "source"
+        label = self.query_one("#cover-art-source", Label)
+        if available:
+            label.update("")
         else:
-            source_text = "Cover Art Archive"
-        self.query_one("#cover-art-source", Label).update(f"[dim]({source_text})[/dim]")
+            label.update("[dim](unavailable)[/dim]")
+        search_btn = self.query_one("#btn-cover-search", Button)
+        # The Search action enriches the candidate currently selected, so
+        # require both a candidate and a "ready" phase before exposing it.
+        eligible = (
+            not available
+            and meta is not None
+            and bool((meta.album_artist or "").strip() or (meta.album or "").strip())
+            and self.phase == "ready"
+            and not self._operation_busy
+        )
+        search_btn.disabled = not eligible
+        search_btn.styles.display = "block" if eligible else "none"
+
+        view_btn = self.query_one("#btn-cover-view", Button)
+        view_eligible = available and self.phase == "ready"
+        view_btn.disabled = not view_eligible
+        view_btn.styles.display = "block" if view_eligible else "none"
+
+    def _do_cover_art_view(self) -> None:
+        """Open the current candidate's cover-art URL in the system browser."""
+        from .. import artwork as artwork_mod
+
+        meta = self._current_meta()
+        if meta is None:
+            return
+        url = artwork_mod.primary_cover_art_url(meta)
+        if not url:
+            self._announce("No cover-art URL to view.", severity="warning")
+            return
+        opener = shutil.which("xdg-open") or shutil.which("gio") or shutil.which("open")
+        if not opener:
+            self._announce("No URL opener (xdg-open) available.", severity="warning")
+            return
+        cmd = [opener, "open", url] if opener.endswith("gio") else [opener, url]
+        try:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as exc:
+            self._announce(f"Could not open URL: {exc}", severity="error")
+
+    def _do_cover_art_search(self) -> None:
+        """Run a MusicBrainz search for cover art on the current candidate.
+
+        Bypasses the Sources toggle: the user pressed the button explicitly,
+        so we hit MusicBrainz even when it's disabled for automatic lookup.
+        """
+        if self.phase != "ready" or self._operation_busy:
+            return
+        if self._cover_art_available:
+            return
+        meta = self._current_meta()
+        if meta is None:
+            return
+        artist = (meta.album_artist or "").strip()
+        album = (meta.album or "").strip()
+        if not artist and not album:
+            self._announce("Need an artist or album before searching.", severity="warning")
+            return
+        self._operation_busy = True
+        try:
+            search_btn = self.query_one("#btn-cover-search", Button)
+            search_btn.disabled = True
+        except Exception:
+            pass
+        self._log(
+            f"> Searching MusicBrainz for cover art: [bold]{artist}[/bold] — [bold]{album}[/bold]"
+        )
+        self._start_cover_art_search(meta, artist, album)
+
+    @work(thread=True, name="cover-art-search")
+    def _start_cover_art_search(
+        self,
+        target_meta: "Metadata",
+        artist: str,
+        album: str,
+    ) -> None:
+        from ..metadata import musicbrainz as mb_mod
+        from .. import artwork as artwork_mod
+
+        meta_debug = getattr(self._args, "metadata_debug", False) or self._args.debug
+        # Cover art is keyed at the release level on Cover Art Archive, so we
+        # don't need a disc-id/TOC-exact match — clearing those fields lets
+        # _select_medium fall through to the single-medium / track-count
+        # branches and accept ordinary text-search hits. We also drop the
+        # year filter: MB's `date:` clause matches the per-release date,
+        # which often differs from the candidate's year on reissues, so
+        # restricting by year frequently zeroes out otherwise-good results.
+        # Cover art is shared across pressings, so any release works.
+        search_disc = self._disc_info
+        if search_disc is not None:
+            search_disc = replace(search_disc, mb_disc_id="", mb_toc="")
+        try:
+            hits = mb_mod.search_releases(
+                artist,
+                album,
+                disc_info=search_disc,
+                timeout=self._cfg.metadata_timeout,
+                debug=meta_debug,
+            )
+        except Exception as exc:
+            self._tlog(f"[bold red]✗ Cover-art search failed: {exc}[/bold red]")
+            self.call_from_thread(self._finish_cover_art_search, False)
+            return
+
+        for hit in hits:
+            if hit.mb_release_id or hit.mb_release_group_id or hit.cover_art_url:
+                if artwork_mod.apply_cover_art_search_result(target_meta, hit):
+                    self._tlog(
+                        "[green]✓[/green] Cover art linked from MusicBrainz."
+                    )
+                    self.call_from_thread(self._finish_cover_art_search, True)
+                    return
+
+        self._tlog("[yellow]![/yellow] No cover art found on MusicBrainz.")
+        self.call_from_thread(self._finish_cover_art_search, False)
+
+    def _finish_cover_art_search(self, applied: bool) -> None:
+        self._operation_busy = False
+        if applied:
+            # Re-render the row so the checkbox flips on and the Search
+            # button hides; nothing else about the candidate changed.
+            self._update_cover_art_checkbox()
+            if self._cover_art_available:
+                self._cover_art_selected = True
+                try:
+                    self.query_one("#chk-cover-art", Checkbox).value = True
+                except Exception:
+                    pass
+        else:
+            # Just refresh button enabled-state; the row stays as
+            # "(unavailable)" with the Search button still visible.
+            self._update_cover_art_checkbox()
 
     # ------------------------------------------------------------------
     # Events in ready phase
@@ -1836,6 +1969,10 @@ class DiscvaultApp(App[None]):
             self._open_output_selector()
         elif bid == "btn-extras":
             self._open_extras_selector()
+        elif bid == "btn-cover-search":
+            self._do_cover_art_search()
+        elif bid == "btn-cover-view":
+            self._do_cover_art_view()
         elif bid == "btn-eject":
             self._do_eject()
         elif bid == "btn-start":
@@ -2528,6 +2665,7 @@ class DiscvaultApp(App[None]):
             "tracklist-scroll",
             "extras-notice",
             "tags-row",
+            "cover-art-row",
             "target-row",
         ):
             self._hide(section)
@@ -2996,6 +3134,7 @@ class DiscvaultApp(App[None]):
             "tracklist-scroll",
             "extras-notice",
             "tags-row",
+            "cover-art-row",
             "target-row",
         ):
             self._hide(section)
@@ -3193,6 +3332,7 @@ class DiscvaultApp(App[None]):
             "candidates-section",
             "tracklist-scroll",
             "tags-row",
+            "cover-art-row",
             "target-row",
         ):
             self._hide(section)

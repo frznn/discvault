@@ -53,20 +53,52 @@ def download_cover_art(
 
 
 def describe_cover_art(meta: Metadata, *, enabled: bool = True) -> str:
-    """Return a short user-facing description of cover-art availability."""
+    """Return a short user-facing description of cover-art availability.
+
+    The label is intentionally minimal: only emit something when there's
+    nothing to download or when the user has turned cover art off entirely.
+    The TUI hides the label otherwise, so the source name doesn't repeat
+    information already visible in the candidates table.
+    """
     if not enabled:
         return "disabled in Settings"
-    urls = _candidate_urls(meta)
-    if not urls:
-        return "unavailable for selected metadata"
-    if meta.cover_art_url:
-        return f"available from {meta.source}"
-    return "available via Cover Art Archive"
+    if not _candidate_urls(meta):
+        return "unavailable"
+    return ""
 
 
 def has_cover_art(meta: Metadata) -> bool:
     """Return True when the metadata has at least one cover-art source."""
     return bool(_candidate_urls(meta))
+
+
+def primary_cover_art_url(meta: Metadata) -> str:
+    """Return the best URL for previewing the cover, or "" if none."""
+    urls = _candidate_urls(meta)
+    return urls[0] if urls else ""
+
+
+def apply_cover_art_search_result(target: Metadata, hit: Metadata) -> bool:
+    """Copy cover-art-bearing identifiers from ``hit`` onto ``target`` in place.
+
+    Returns True if any field was updated. Used by the TUI's on-demand
+    "search for cover art" action: a MusicBrainz search runs against the
+    selected candidate's artist/album/year, and if a hit is found we
+    transplant just the IDs needed to construct a Cover Art Archive URL,
+    leaving the rest of the candidate's metadata untouched.
+    """
+    updated = False
+    if hit.cover_art_url and not target.cover_art_url:
+        target.cover_art_url = hit.cover_art_url
+        target.cover_art_ext = hit.cover_art_ext
+        updated = True
+    if hit.mb_release_id and not target.mb_release_id:
+        target.mb_release_id = hit.mb_release_id
+        updated = True
+    if hit.mb_release_group_id and not target.mb_release_group_id:
+        target.mb_release_group_id = hit.mb_release_group_id
+        updated = True
+    return updated
 
 
 def _candidate_urls(meta: Metadata) -> list[str]:
