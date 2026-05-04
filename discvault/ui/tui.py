@@ -596,6 +596,7 @@ class DiscvaultApp(App[None]):
                     yield Label("Destination", classes="tag-lbl")
                     yield Input(placeholder="", id="target-dir-input", compact=True)
                     yield Button("Browse…", id="btn-browse", compact=True)
+                    yield Button("Open", id="btn-target", compact=True, disabled=True)
 
                 # Running phase: progress bars
                 with Vertical(id="progress-section"):
@@ -673,7 +674,6 @@ class DiscvaultApp(App[None]):
                 yield Button("Extras", id="btn-extras", disabled=True)
                 with Horizontal(id="action-right"):
                     yield Button("Outputs", id="btn-outputs")
-                    yield Button("Open Library", id="btn-target", disabled=True)
                     yield Button("Eject CD", id="btn-eject", disabled=True)
                     yield Button("Start", id="btn-start", variant="success", disabled=True)
                     yield Button("Quit", id="btn-cancel", variant="error")
@@ -1112,8 +1112,9 @@ class DiscvaultApp(App[None]):
         except Exception:
             return
 
-        path, label, _ = self._target_button_destination()
-        btn.label = label
+        # The button now lives on the Destination row with the static label
+        # "Open"; only its enabled state needs refreshing.
+        path, _label, _ = self._target_button_destination()
         btn.disabled = (
             self.phase not in {"ready", "done", "error"}
             or self._operation_busy
