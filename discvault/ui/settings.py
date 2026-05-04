@@ -166,7 +166,7 @@ class ConfigScreen(ModalScreen[Config | None]):
             Static("Output", classes="cfg-section-header"),
             self._check_row(
                 ("Keep WAV files", "cfg-keep-wav", self._cfg.keep_wav),
-                ("Download cover art", "cfg-cover-art", self._cfg.download_cover_art),
+                ("Cover art", "cfg-cover-art", self._cfg.download_cover_art),
             ),
             self._input_row("Opus bitrate", "cfg-opus-bitrate", str(self._cfg.opus_bitrate)),
             self._input_row("AAC bitrate", "cfg-aac-bitrate", str(self._cfg.aac_bitrate)),

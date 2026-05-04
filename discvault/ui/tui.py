@@ -590,7 +590,7 @@ class DiscvaultApp(App[None]):
                 yield Static("", id="extras-notice", markup=True)
 
                 with Horizontal(id="cover-art-row"):
-                    yield Checkbox("Download Cover Art", id="chk-cover-art", compact=True, disabled=True)
+                    yield Checkbox("Cover Art", id="chk-cover-art", compact=True, disabled=True)
                     yield Label("", id="cover-art-source", classes="cover-art-source-lbl")
                     yield Button("Search…", id="btn-cover-search", compact=True, disabled=True)
                     yield Button("View", id="btn-cover-view", compact=True, disabled=True)
