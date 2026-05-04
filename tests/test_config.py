@@ -190,24 +190,24 @@ class ConfigTests(unittest.TestCase):
 
         self.assertTrue(cfg.dedupe_equivalent_candidates)
 
-    def test_prefer_first_release_year_round_trip(self) -> None:
+    def test_prefer_release_year_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"
             old = config_mod.CONFIG_PATH
             config_mod.CONFIG_PATH = config_path
             try:
                 cfg = config_mod.Config()
-                cfg.prefer_first_release_year = False
+                cfg.prefer_release_year = True
                 cfg.save()
                 loaded = config_mod.Config.load()
                 saved_text = config_path.read_text()
             finally:
                 config_mod.CONFIG_PATH = old
 
-        self.assertFalse(loaded.prefer_first_release_year)
-        self.assertIn("prefer_first_release_year = false", saved_text)
+        self.assertTrue(loaded.prefer_release_year)
+        self.assertIn("prefer_release_year = true", saved_text)
 
-    def test_prefer_first_release_year_defaults_to_true_when_missing(self) -> None:
+    def test_prefer_release_year_defaults_to_false_when_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"
             config_path.write_text("[discvault]\n")
@@ -218,7 +218,21 @@ class ConfigTests(unittest.TestCase):
             finally:
                 config_mod.CONFIG_PATH = old
 
-        self.assertTrue(cfg.prefer_first_release_year)
+        self.assertFalse(cfg.prefer_release_year)
+
+    def test_legacy_prefer_first_release_year_migrates_with_inverted_meaning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text("[discvault]\nprefer_first_release_year = false\n")
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config.load()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        # Old "prefer_first_release_year = false" → new "prefer_release_year = True".
+        self.assertTrue(cfg.prefer_release_year)
 
     def test_device_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

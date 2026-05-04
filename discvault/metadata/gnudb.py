@@ -222,11 +222,14 @@ def parse_cddb_record(text: str, source: str = "GnuDB") -> Metadata | None:
     if not album_artist and not album and not tracks:
         return None
 
+    # GnuDB's DYEAR is the album's first-release year, not the year of the
+    # specific pressing — store it as ``first_release_year`` so the candidate
+    # list shows it under the "Year" column rather than "Release year".
     return Metadata(
         source=source,
         album_artist=album_artist,
         album=album,
-        year=year,
+        first_release_year=year,
         tracks=tracks,
     )
 

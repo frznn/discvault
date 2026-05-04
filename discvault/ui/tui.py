@@ -1584,7 +1584,7 @@ class DiscvaultApp(App[None]):
         self._sync_track_selection()
         table = self.query_one("#meta-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("#", "Source", "Artist", "Album", "First release", "Year", "Tracks")
+        table.add_columns("#", "Source", "Artist", "Album", "Year", "Release year", "Tracks")
         for i, m in enumerate(self._candidates, 1):
             self._ensure_meta_tracks(m)
             table.add_row(
@@ -1652,8 +1652,13 @@ class DiscvaultApp(App[None]):
             self.set_timer(0, lambda: self._start_import_from_value("url", self._metadata_url))
 
     def _year_for_input(self, m: "Metadata") -> str:
-        """Pick which year populates ``#input-year`` for a candidate."""
-        if self._cfg.prefer_first_release_year and m.first_release_year:
+        """Pick which year populates ``#input-year`` for a candidate.
+
+        Default (``prefer_release_year`` = False) uses the first-release year
+        when set, falling through to the pressing year. Setting
+        ``prefer_release_year`` flips the preference: pressing year only.
+        """
+        if not self._cfg.prefer_release_year and m.first_release_year:
             return m.first_release_year
         return m.year or ""
 

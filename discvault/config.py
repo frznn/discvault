@@ -76,7 +76,7 @@ class Config:
     log_to_file: bool = False
     blank_redundant_track_artist: bool = True
     dedupe_equivalent_candidates: bool = True
-    prefer_first_release_year: bool = True
+    prefer_release_year: bool = False  # False = prefer first-release year (default)
     manual_src_musicbrainz: bool = True
     manual_src_discogs: bool = True
     use_local_cddb_cache: bool = True
@@ -174,10 +174,15 @@ class Config:
             dv.get("dedupe_equivalent_candidates"),
             cfg.dedupe_equivalent_candidates,
         )
-        cfg.prefer_first_release_year = _as_bool(
-            dv.get("prefer_first_release_year"),
-            cfg.prefer_first_release_year,
-        )
+        # Migrate the legacy `prefer_first_release_year` key (inverted meaning).
+        if "prefer_first_release_year" in dv:
+            legacy = _as_bool(dv.get("prefer_first_release_year"), True)
+            cfg.prefer_release_year = not legacy
+        else:
+            cfg.prefer_release_year = _as_bool(
+                dv.get("prefer_release_year"),
+                cfg.prefer_release_year,
+            )
         cfg.manual_src_musicbrainz = _as_bool(
             dv.get("manual_src_musicbrainz"),
             cfg.manual_src_musicbrainz,
@@ -297,7 +302,7 @@ class Config:
             f"log_to_file = {str(self.log_to_file).lower()}",
             f"blank_redundant_track_artist = {str(self.blank_redundant_track_artist).lower()}",
             f"dedupe_equivalent_candidates = {str(self.dedupe_equivalent_candidates).lower()}",
-            f"prefer_first_release_year = {str(self.prefer_first_release_year).lower()}",
+            f"prefer_release_year = {str(self.prefer_release_year).lower()}",
             f"manual_src_musicbrainz = {str(self.manual_src_musicbrainz).lower()}",
             f"manual_src_discogs = {str(self.manual_src_discogs).lower()}",
             f"use_local_cddb_cache = {str(self.use_local_cddb_cache).lower()}",

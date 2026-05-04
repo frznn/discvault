@@ -211,9 +211,9 @@ class ConfigScreen(ModalScreen[Config | None]):
                     self._cfg.dedupe_equivalent_candidates,
                 ),
                 (
-                    "Prefer first-release year",
-                    "cfg-prefer-first-release-year",
-                    self._cfg.prefer_first_release_year,
+                    "Prefer release year",
+                    "cfg-prefer-release-year",
+                    self._cfg.prefer_release_year,
                 ),
             ),
 
@@ -455,7 +455,7 @@ class ConfigScreen(ModalScreen[Config | None]):
         cfg.log_to_file = self._check("cfg-log-to-file")
         cfg.blank_redundant_track_artist = self._check("cfg-blank-redundant-artists")
         cfg.dedupe_equivalent_candidates = self._check("cfg-dedupe-equivalent")
-        cfg.prefer_first_release_year = self._check("cfg-prefer-first-release-year")
+        cfg.prefer_release_year = self._check("cfg-prefer-release-year")
         completion_sound = self.query_one("#cfg-completion-sound", Select).value
         if completion_sound in {"bell", "chime", "both", "off"}:
             cfg.completion_sound = completion_sound

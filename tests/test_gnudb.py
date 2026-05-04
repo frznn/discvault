@@ -19,7 +19,9 @@ class ParseCddbRecordTests(unittest.TestCase):
         assert meta is not None
         self.assertEqual(meta.album_artist, "Various")
         self.assertEqual(meta.album, "Compilation")
-        self.assertEqual(meta.year, "2001")
+        # DYEAR is the first-release year per GnuDB convention.
+        self.assertEqual(meta.first_release_year, "2001")
+        self.assertEqual(meta.year, "")
         self.assertEqual(len(meta.tracks), 2)
         self.assertEqual(meta.tracks[0].title, "First Track")
         self.assertEqual(meta.tracks[0].artist, "First Artist")
