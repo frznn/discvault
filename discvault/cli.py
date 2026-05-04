@@ -140,6 +140,11 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
         sys.exit(1)
     log(f"Using device: {device}")
 
+    drive_summary = cfg.drive_profile_summary(device)
+    if drive_summary:
+        log(f"Drive profile: {device} ({drive_summary})")
+    cfg = cfg.with_drive_profile(device)
+
     # ------------------------------------------------------------------
     # 2. Disc info
     # ------------------------------------------------------------------

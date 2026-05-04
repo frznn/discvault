@@ -250,6 +250,98 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.device, "")
 
+    def test_drive_profiles_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config()
+                cfg.drives["/dev/sr0"] = config_mod.DriveProfile(
+                    sample_offset=12,
+                    image_ripper="readom",
+                )
+                cfg.drives["/dev/sr1"] = config_mod.DriveProfile(
+                    cdrdao_command="cdrdao read-cd --device {device} {toc}",
+                )
+                cfg.save()
+                loaded = config_mod.Config.load()
+                saved_text = config_path.read_text()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertEqual(loaded.drives["/dev/sr0"].sample_offset, 12)
+        self.assertEqual(loaded.drives["/dev/sr0"].image_ripper, "readom")
+        self.assertEqual(loaded.drives["/dev/sr0"].cdrdao_command, "")
+        self.assertIsNone(loaded.drives["/dev/sr1"].sample_offset)
+        self.assertEqual(
+            loaded.drives["/dev/sr1"].cdrdao_command,
+            "cdrdao read-cd --device {device} {toc}",
+        )
+        self.assertIn('[drives."/dev/sr0"]', saved_text)
+        self.assertIn("sample_offset = 12", saved_text)
+        self.assertIn('image_ripper = "readom"', saved_text)
+        self.assertIn('[drives."/dev/sr1"]', saved_text)
+
+    def test_drive_profiles_skip_empty_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                '[discvault]\n[drives."/dev/sr0"]\n[drives."/dev/sr1"]\nsample_offset = -7\n'
+            )
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config.load()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        # Empty profile blocks are not preserved (no fields to override).
+        self.assertNotIn("/dev/sr0", cfg.drives)
+        self.assertEqual(cfg.drives["/dev/sr1"].sample_offset, -7)
+
+    def test_with_drive_profile_overrides_global_fields(self) -> None:
+        cfg = config_mod.Config()
+        cfg.cdparanoia_sample_offset = 0
+        cfg.image_ripper = "cdrdao"
+        cfg.drives["/dev/sr0"] = config_mod.DriveProfile(
+            sample_offset=24,
+            image_ripper="readom",
+        )
+
+        merged = cfg.with_drive_profile("/dev/sr0")
+        self.assertEqual(merged.cdparanoia_sample_offset, 24)
+        self.assertEqual(merged.image_ripper, "readom")
+        # Source cfg is untouched.
+        self.assertEqual(cfg.cdparanoia_sample_offset, 0)
+        self.assertEqual(cfg.image_ripper, "cdrdao")
+
+    def test_with_drive_profile_leaves_global_when_no_match(self) -> None:
+        cfg = config_mod.Config()
+        cfg.cdparanoia_sample_offset = 5
+        merged = cfg.with_drive_profile("/dev/sr2")
+        self.assertEqual(merged.cdparanoia_sample_offset, 5)
+
+    def test_with_drive_profile_partial_override_falls_through(self) -> None:
+        cfg = config_mod.Config()
+        cfg.cdparanoia_sample_offset = 0
+        cfg.image_ripper = "cdrdao"
+        cfg.drives["/dev/sr0"] = config_mod.DriveProfile(sample_offset=12)
+        merged = cfg.with_drive_profile("/dev/sr0")
+        self.assertEqual(merged.cdparanoia_sample_offset, 12)
+        self.assertEqual(merged.image_ripper, "cdrdao")
+
+    def test_drive_profile_summary_renders_set_fields(self) -> None:
+        cfg = config_mod.Config()
+        cfg.drives["/dev/sr0"] = config_mod.DriveProfile(
+            sample_offset=-12, image_ripper="readom"
+        )
+        self.assertEqual(
+            cfg.drive_profile_summary("/dev/sr0"),
+            "offset=-12, ripper=readom",
+        )
+        self.assertEqual(cfg.drive_profile_summary("/dev/sr1"), "")
+
     def test_lookup_log_timings_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"

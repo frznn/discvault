@@ -39,6 +39,14 @@ class DiscogsConfig:
     token: str = ""
 
 
+@dataclass
+class DriveProfile:
+    """Per-drive overrides. Empty/``None`` fields mean "use the global value"."""
+    sample_offset: int | None = None
+    image_ripper: str = ""  # cdrdao | readom | "" (no override)
+    cdrdao_command: str = ""  # "" means no override
+
+
 DEFAULT_CDRDAO_COMMAND = (
     "cdrdao read-cd --device {device} --driver generic-mmc-raw -v 1 --read-raw"
     " --datafile {datafile} {toc}"
@@ -80,6 +88,7 @@ class Config:
     aac_bitrate: int = 256
     gnudb: GnudbConfig = field(default_factory=GnudbConfig)
     discogs: DiscogsConfig = field(default_factory=DiscogsConfig)
+    drives: dict[str, DriveProfile] = field(default_factory=dict)
 
     @property
     def cdrdao_driver(self) -> str:
@@ -210,10 +219,60 @@ class Config:
         discogs = data.get("discogs", {})
         cfg.discogs.token = _as_str(discogs.get("token"), cfg.discogs.token)
 
+        drives_data = data.get("drives", {})
+        if isinstance(drives_data, dict):
+            for path, raw in drives_data.items():
+                if not isinstance(raw, dict):
+                    continue
+                profile = DriveProfile()
+                if raw.get("sample_offset") is not None:
+                    profile.sample_offset = _as_int(raw.get("sample_offset"), 0)
+                profile.image_ripper = _as_str(raw.get("image_ripper"), "")
+                profile.cdrdao_command = _as_str(raw.get("cdrdao_command"), "")
+                if (
+                    profile.sample_offset is not None
+                    or profile.image_ripper
+                    or profile.cdrdao_command
+                ):
+                    cfg.drives[str(path)] = profile
+
         return cfg
 
     def clone(self) -> "Config":
         return copy.deepcopy(self)
+
+    def with_drive_profile(self, device: str) -> "Config":
+        """Return a clone with the given drive's profile overrides applied.
+
+        Per-drive ``sample_offset`` / ``image_ripper`` / ``cdrdao_command`` win
+        over the global value when set; missing fields fall through to the
+        global. If no profile exists for ``device``, the clone is identical.
+        """
+        merged = self.clone()
+        profile = self.drives.get(device)
+        if profile is None:
+            return merged
+        if profile.sample_offset is not None:
+            merged.cdparanoia_sample_offset = profile.sample_offset
+        if profile.image_ripper:
+            merged.image_ripper = profile.image_ripper
+        if profile.cdrdao_command:
+            merged.cdrdao_command = profile.cdrdao_command
+        return merged
+
+    def drive_profile_summary(self, device: str) -> str:
+        """One-line summary of the active per-drive overrides, or '' if none."""
+        profile = self.drives.get(device)
+        if profile is None:
+            return ""
+        bits: list[str] = []
+        if profile.sample_offset is not None:
+            bits.append(f"offset={profile.sample_offset:+d}")
+        if profile.image_ripper:
+            bits.append(f"ripper={profile.image_ripper}")
+        if profile.cdrdao_command:
+            bits.append("cdrdao_command=overridden")
+        return ", ".join(bits)
 
     def save(self) -> None:
         """Write current settings to the config file (TOML format)."""
@@ -258,6 +317,16 @@ class Config:
             f"token = {_toml_string(self.discogs.token)}",
             "",
         ]
+        for path in sorted(self.drives):
+            profile = self.drives[path]
+            lines.append(f"[drives.{_toml_string(path)}]")
+            if profile.sample_offset is not None:
+                lines.append(f"sample_offset = {profile.sample_offset}")
+            if profile.image_ripper:
+                lines.append(f"image_ripper = {_toml_string(profile.image_ripper)}")
+            if profile.cdrdao_command:
+                lines.append(f"cdrdao_command = {_toml_string(profile.cdrdao_command)}")
+            lines.append("")
         tmp_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(

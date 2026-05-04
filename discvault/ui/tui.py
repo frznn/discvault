@@ -2472,6 +2472,13 @@ class DiscvaultApp(App[None]):
 
         args = self._args
         cfg = self._cfg
+        if self._disc_info is not None and self._disc_info.device:
+            drive_summary = cfg.drive_profile_summary(self._disc_info.device)
+            if drive_summary:
+                self._tlog(
+                    f"[dim]Drive profile: {self._disc_info.device} ({drive_summary})[/dim]"
+                )
+            cfg = cfg.with_drive_profile(self._disc_info.device)
         enc = EncodeOptions(
             flac_compression=getattr(args, "flac_compression", 8),
             flac_verify=not getattr(args, "no_verify", False),
