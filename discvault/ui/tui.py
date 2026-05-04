@@ -374,6 +374,58 @@ def _needs_overwrite_confirmation(album_root: Path, outputs: dict[str, bool] | N
     return any(_dir_has_files(d) for d in dirs)
 
 
+def _has_partial_rip_state(album_root: Path, work_dir: Path) -> bool:
+    """True when ``album_root`` (or ``work_dir``) already has rip artifacts.
+
+    Used to enable the TUI ``Resume`` button so the user can re-run with
+    skip-when-present without overwriting a partly-completed run.
+    Empty files are ignored — they're typically the leftovers of a failed write.
+    """
+    from .. import library
+    if not album_root.exists() and not work_dir.exists():
+        return False
+    if album_root.is_dir():
+        # Any non-empty cover-art file at the album root.
+        for ext in ("jpg", "jpeg", "png", "webp"):
+            cover = album_root / f"cover.{ext}"
+            if cover.exists() and cover.stat().st_size > 0:
+                return True
+        # Any non-empty file inside the encoded-output / image / extras dirs.
+        candidate_dirs = [
+            library.image_dir(album_root),
+            library.flac_dir(album_root),
+            library.mp3_dir(album_root),
+            library.ogg_dir(album_root),
+            library.opus_dir(album_root),
+            library.alac_dir(album_root),
+            library.aac_dir(album_root),
+            library.wav_dir(album_root),
+            library.extras_dir(album_root),
+        ]
+        for d in candidate_dirs:
+            if _dir_has_nonempty_file(d):
+                return True
+    # Any leftover non-empty WAV in work_dir from a previous abort.
+    if work_dir.is_dir():
+        for entry in work_dir.iterdir():
+            name = entry.name
+            if entry.is_file() and name.endswith(".cdda.wav") and entry.stat().st_size > 0:
+                return True
+    return False
+
+
+def _dir_has_nonempty_file(d: Path) -> bool:
+    if not d.is_dir():
+        return False
+    for entry in d.iterdir():
+        try:
+            if entry.is_file() and entry.stat().st_size > 0:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 _PROGRESS_KEYS = ("image", "iso", "rip", "flac", "mp3", "ogg", "opus", "alac", "aac", "wav", "extras")
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -457,6 +509,7 @@ class DiscvaultApp(App[None]):
         self._current_proc: subprocess.Popen | None = None
         self._operation_busy = False  # guard against overlapping fetch/rip actions
         self._target_open_busy = False
+        self._start_button_in_resume_mode = False  # True when btn-start label is "Resume"
         self._target_is_base = False  # True when the target input holds a base dir (album subfolder created inside)
         self._target_base_dir = ""
         self._syncing_target_input = False
@@ -1075,6 +1128,41 @@ class DiscvaultApp(App[None]):
             return
         btn.disabled = self.phase == "running" or self._operation_busy
 
+    def _refresh_resume_button(self) -> None:
+        """Re-label ``#btn-start`` as ``Resume`` when partial output is detected.
+
+        The Start button does double duty: in resume mode it skips already-
+        produced artifacts; in fresh-start mode it runs the full pipeline.
+        ``self._start_button_in_resume_mode`` carries the chosen mode to the
+        click handler.
+        """
+        try:
+            btn = self.query_one("#btn-start", Button)
+        except Exception:
+            return
+        resume_mode = False
+        if self.phase == "ready" and not self._operation_busy:
+            album_root = self._prospective_album_root()
+            if album_root is not None and _has_partial_rip_state(
+                album_root, Path(self._cfg.work_dir)
+            ):
+                resume_mode = True
+        self._start_button_in_resume_mode = resume_mode
+        btn.label = "Resume" if resume_mode else "Start"
+
+    def _prospective_album_root(self) -> Path | None:
+        from .. import library
+
+        artist = self._input_val("input-artist").strip()
+        album = self._input_val("input-album").strip()
+        if not artist or not album:
+            return None
+        target_override = self._target_album_root() if self._target_dir_value() else None
+        if target_override is not None:
+            return target_override
+        year = self._input_val("input-year").strip()
+        return library.album_root(self._cfg.base_dir, artist, album, year)
+
     def _has_detected_extras(self) -> bool:
         if self._extra_scan_bundle is not None:
             return bool(self._extra_scan_bundle.entries)
@@ -1541,6 +1629,7 @@ class DiscvaultApp(App[None]):
         self._refresh_extras_button()
         self._refresh_extras_notice()
         self._refresh_import_buttons()
+        self._refresh_resume_button()
         hinted_extra_tracks = self._possible_extra_tracks()
         if (
             self._disc_info is not None
@@ -1656,6 +1745,7 @@ class DiscvaultApp(App[None]):
             self._manual_meta.year = year
         self._update_target_input()
         self._update_cover_art_checkbox()
+        self._refresh_resume_button()
 
     @on(Input.Changed, "#target-dir-input")
     def _on_target_dir_changed(self, event: Input.Changed) -> None:
@@ -1666,6 +1756,7 @@ class DiscvaultApp(App[None]):
         self._target_is_base = False
         self._target_base_dir = ""
         self._refresh_target_button()
+        self._refresh_resume_button()
 
     @on(Checkbox.Changed, "#chk-cover-art")
     def _on_cover_art_changed(self, event: Checkbox.Changed) -> None:
@@ -1742,7 +1833,7 @@ class DiscvaultApp(App[None]):
         elif bid == "btn-eject":
             self._do_eject()
         elif bid == "btn-start":
-            self._do_start()
+            self._do_start(resume=self._start_button_in_resume_mode)
         elif bid == "btn-cancel":
             if self.phase == "running":
                 self._confirm_cancel()
@@ -2046,6 +2137,7 @@ class DiscvaultApp(App[None]):
         self._refresh_output_button()
         self._refresh_import_buttons()
         self._refresh_extras_button()
+        self._refresh_resume_button()
         self._refresh_extras_notice()
         self._log(f"[green]✓[/green] {detail}")
         self._show_extras_selector()
@@ -2257,7 +2349,7 @@ class DiscvaultApp(App[None]):
         self._refresh_target_button()
         self._start_open_target(path)
 
-    def _do_start(self) -> None:
+    def _do_start(self, *, resume: bool = False) -> None:
         if self._operation_busy:
             return
         artist = self._input_val("input-artist")
@@ -2297,7 +2389,8 @@ class DiscvaultApp(App[None]):
         album_root = self._target_album_root() or library.album_root(self._cfg.base_dir, artist, album, year)
         overwrite_outputs = dict(outputs)
         overwrite_outputs["extras"] = bool(selected_extra_paths)
-        if _needs_overwrite_confirmation(album_root, overwrite_outputs):
+        # Resume implies the user already knows the dir is non-empty; skip the warn.
+        if not resume and _needs_overwrite_confirmation(album_root, overwrite_outputs):
             message = (
                 "The target album directory already exists and may contain files.\n\n"
                 f"{album_root}\n\n"
@@ -2344,6 +2437,7 @@ class DiscvaultApp(App[None]):
             do_wav,
             selected_tracks,
             selected_extra_paths,
+            resume=resume,
         )
 
     def _apply_start_confirmation(
@@ -2401,6 +2495,8 @@ class DiscvaultApp(App[None]):
         do_wav: bool,
         selected_tracks: list[int],
         selected_extra_paths: list[str],
+        *,
+        resume: bool = False,
     ) -> None:
         self._last_rip_params = dict(
             artist=artist, album=album, year=year,
@@ -2409,6 +2505,7 @@ class DiscvaultApp(App[None]):
             do_alac=do_alac, do_aac=do_aac, do_wav=do_wav,
             selected_tracks=selected_tracks,
             selected_extra_paths=selected_extra_paths,
+            resume=resume,
         )
         self.phase = "running"
         self._operation_busy = True
@@ -2449,6 +2546,7 @@ class DiscvaultApp(App[None]):
             do_wav,
             selected_tracks,
             selected_extra_paths,
+            resume,
         )
 
     @work(thread=True, name="rip")
@@ -2459,6 +2557,7 @@ class DiscvaultApp(App[None]):
         do_opus: bool, do_alac: bool, do_aac: bool, do_wav: bool,
         selected_tracks: list[int],
         selected_extra_paths: list[str],
+        resume: bool = False,
     ) -> None:
         from ..metadata.types import Metadata as MetaType
         from ..pipeline import (
@@ -2557,6 +2656,7 @@ class DiscvaultApp(App[None]):
                     extras_iso_path=self._extra_scan_bundle.iso_path if self._extra_scan_bundle is not None else None,
                     extras_mount_root=self._extra_scan_bundle.mount_root if self._extra_scan_bundle is not None else None,
                     album_root_override=self._target_album_root() if self._target_dir_value() else None,
+                    resume=resume,
                 ),
                 callbacks,
             )
@@ -2775,6 +2875,7 @@ class DiscvaultApp(App[None]):
         self._refresh_output_button()
         self._refresh_extras_button()
         self._refresh_import_buttons()
+        self._refresh_resume_button()
 
     # ------------------------------------------------------------------
     # Disc watch

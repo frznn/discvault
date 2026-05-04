@@ -19,6 +19,7 @@ from discvault.ui.tui import _folder_open_command
 from discvault.ui.tui import _extras_announcement_text
 from discvault.ui.tui import _extras_button_label
 from discvault.ui.tui import _extras_notice_text
+from discvault.ui.tui import _has_partial_rip_state
 from discvault.ui.tui import _needs_overwrite_confirmation
 from discvault.ui.tui import _output_stage_label
 from discvault.ui.tui import MetadataDataTable
@@ -1147,6 +1148,76 @@ class YearForInputTests(unittest.TestCase):
     def test_prefer_off_with_no_pressing_year_returns_empty_string(self) -> None:
         app = self._app(prefer_first=False)
         self.assertEqual(app._year_for_input(self._meta(first="1969")), "")
+
+
+class HasPartialRipStateTests(unittest.TestCase):
+    def test_false_when_album_root_and_work_dir_missing(self) -> None:
+        with TemporaryDirectory() as tmp:
+            album = Path(tmp) / "missing_album"
+            work = Path(tmp) / "missing_work"
+            self.assertFalse(_has_partial_rip_state(album, work))
+
+    def test_false_when_album_root_empty(self) -> None:
+        with TemporaryDirectory() as tmp:
+            album = Path(tmp) / "album"
+            album.mkdir()
+            work = Path(tmp) / "work"
+            work.mkdir()
+            self.assertFalse(_has_partial_rip_state(album, work))
+
+    def test_true_when_cover_present(self) -> None:
+        with TemporaryDirectory() as tmp:
+            album = Path(tmp) / "album"
+            album.mkdir()
+            (album / "cover.jpg").write_bytes(b"x")
+            work = Path(tmp) / "work"
+            work.mkdir()
+            self.assertTrue(_has_partial_rip_state(album, work))
+
+    def test_true_when_flac_dir_has_a_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            album = Path(tmp) / "album"
+            (album / "flac").mkdir(parents=True)
+            (album / "flac" / "01.flac").write_bytes(b"x")
+            work = Path(tmp) / "work"
+            work.mkdir()
+            self.assertTrue(_has_partial_rip_state(album, work))
+
+    def test_true_when_image_bin_present(self) -> None:
+        with TemporaryDirectory() as tmp:
+            album = Path(tmp) / "album"
+            (album / "image").mkdir(parents=True)
+            (album / "image" / "Album.bin").write_bytes(b"x")
+            work = Path(tmp) / "work"
+            work.mkdir()
+            self.assertTrue(_has_partial_rip_state(album, work))
+
+    def test_true_when_work_dir_has_wavs(self) -> None:
+        with TemporaryDirectory() as tmp:
+            album = Path(tmp) / "missing"
+            work = Path(tmp) / "work"
+            work.mkdir()
+            (work / "track01.cdda.wav").write_bytes(b"x")
+            self.assertTrue(_has_partial_rip_state(album, work))
+
+    def test_false_when_work_dir_only_has_unrelated_files(self) -> None:
+        with TemporaryDirectory() as tmp:
+            album = Path(tmp) / "album"
+            album.mkdir()
+            work = Path(tmp) / "work"
+            work.mkdir()
+            (work / "scratch.txt").write_bytes(b"x")
+            self.assertFalse(_has_partial_rip_state(album, work))
+
+    def test_false_when_only_empty_files_present(self) -> None:
+        with TemporaryDirectory() as tmp:
+            album = Path(tmp) / "album"
+            (album / "flac").mkdir(parents=True)
+            (album / "flac" / "01.flac").write_bytes(b"")
+            work = Path(tmp) / "work"
+            work.mkdir()
+            (work / "track01.cdda.wav").write_bytes(b"")
+            self.assertFalse(_has_partial_rip_state(album, work))
 
 
 class CandidateTableColumnsTests(unittest.TestCase):
