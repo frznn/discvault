@@ -660,15 +660,16 @@ class DiscvaultApp(App[None]):
                     yield Label("", id="done-title", markup=True)
                     yield Static("", id="done-details", markup=True)
 
-            # Always-visible status log
-            with Container(id="status-log-shell"):
-                yield StatusRichLog(id="status-log", highlight=True, markup=True, max_lines=200)
-                yield Static("", id="status-toast", markup=False)
+            # Always-visible status log + adjacent Copy log button
+            with Horizontal(id="status-log-row"):
+                with Container(id="status-log-shell"):
+                    yield StatusRichLog(id="status-log", highlight=True, markup=True, max_lines=200)
+                    yield Static("", id="status-toast", markup=False)
+                yield Button("Copy log", id="btn-copy-log", compact=True)
 
             # Action bar — inside #outer, always visible below the scroll area
             with Horizontal(id="action-bar"):
                 yield Button("Settings", id="btn-config")
-                yield Button("Copy log", id="btn-copy-log")
                 yield Button("Extras", id="btn-extras", disabled=True)
                 with Horizontal(id="action-right"):
                     yield Button("Outputs", id="btn-outputs")
