@@ -1786,8 +1786,14 @@ class DiscvaultApp(App[None]):
         meta = self._current_meta()
         if meta is None:
             return
-        artist = (meta.album_artist or "").strip()
-        album = (meta.album or "").strip()
+        # Read from the live input fields, not the stored candidate, so
+        # the user can fix typos in Artist/Album before triggering the
+        # MB lookup (e.g. when the source metadata has a misspelling).
+        artist, album, _year = self._manual_search_hints()
+        if not artist:
+            artist = (meta.album_artist or "").strip()
+        if not album:
+            album = (meta.album or "").strip()
         if not artist and not album:
             self._announce("Need an artist or album before searching.", severity="warning")
             return
@@ -1813,19 +1819,20 @@ class DiscvaultApp(App[None]):
         from .. import artwork as artwork_mod
 
         meta_debug = getattr(self._args, "metadata_debug", False) or self._args.debug
-        # Cover art is keyed at the release level on Cover Art Archive, so we
-        # don't need a disc-id/TOC-exact match — clearing those fields lets
-        # _select_medium fall through to the single-medium / track-count
-        # branches and accept ordinary text-search hits. We also drop the
-        # year filter: MB's `date:` clause matches the per-release date,
-        # which often differs from the candidate's year on reissues, so
-        # restricting by year frequently zeroes out otherwise-good results.
-        # Cover art is shared across pressings, so any release works.
+
+        # Cover art is keyed at the release level on Cover Art Archive, so
+        # we don't need a disc-id/TOC-exact match — clearing those fields
+        # lets _select_medium fall through to the single-medium /
+        # track-count branches and accept ordinary text-search hits. The
+        # year filter is also dropped: MB's `date:` clause matches the
+        # per-release date, which often differs from the candidate's year
+        # on reissues, so restricting by year frequently zeroes out
+        # otherwise-good results.
         search_disc = self._disc_info
         if search_disc is not None:
             search_disc = replace(search_disc, mb_disc_id="", mb_toc="")
         try:
-            hits = mb_mod.search_releases(
+            mb_hits = mb_mod.search_releases(
                 artist,
                 album,
                 disc_info=search_disc,
@@ -1837,16 +1844,32 @@ class DiscvaultApp(App[None]):
             self.call_from_thread(self._finish_cover_art_search, False)
             return
 
-        for hit in hits:
+        # Loud diagnostic: log the count, plus how many hits actually
+        # carry the IDs we need. If MB returned 0, the query was too
+        # narrow; if it returned >0 but none are usable, _select_medium
+        # filtered them out (likely a track-count or multi-medium issue).
+        usable = sum(
+            1 for h in mb_hits
+            if h.mb_release_id or h.mb_release_group_id or h.cover_art_url
+        )
+        self._tlog(
+            f"[dim]  · MusicBrainz: {len(mb_hits)} hit(s), {usable} usable.[/dim]"
+        )
+
+        for hit in mb_hits:
             if hit.mb_release_id or hit.mb_release_group_id or hit.cover_art_url:
                 if artwork_mod.apply_cover_art_search_result(target_meta, hit):
                     self._tlog(
-                        "[green]✓[/green] Cover art linked from MusicBrainz."
+                        f"[green]✓[/green] Cover art linked from MusicBrainz "
+                        f"([dim]{hit.album_artist} — {hit.album}[/dim])."
                     )
                     self.call_from_thread(self._finish_cover_art_search, True)
                     return
 
         self._tlog("[yellow]![/yellow] No cover art found on MusicBrainz.")
+        self._tlog(
+            "[dim]  · Check the Artist and Album fields for typos and try again.[/dim]"
+        )
         self.call_from_thread(self._finish_cover_art_search, False)
 
     def _finish_cover_art_search(self, applied: bool) -> None:
