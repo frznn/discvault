@@ -669,9 +669,9 @@ class DiscvaultApp(App[None]):
             with Horizontal(id="action-bar"):
                 yield Button("Settings", id="btn-config")
                 yield Button("Copy log", id="btn-copy-log")
-                yield Button("Select Outputs", id="btn-outputs")
                 yield Button("Extras", id="btn-extras", disabled=True)
                 with Horizontal(id="action-right"):
+                    yield Button("Outputs", id="btn-outputs")
                     yield Button("Open Library", id="btn-target", disabled=True)
                     yield Button("Eject CD", id="btn-eject", disabled=True)
                     yield Button("Start", id="btn-start", variant="success", disabled=True)
