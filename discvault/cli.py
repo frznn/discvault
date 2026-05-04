@@ -426,6 +426,7 @@ def _run(args: argparse.Namespace, cfg: Config) -> None:
                     extras_iso_path=extra_scan_bundle.iso_path if extra_scan_bundle is not None else None,
                     extras_mount_root=extra_scan_bundle.mount_root if extra_scan_bundle is not None else None,
                     album_root_override=target_dir_override,
+                    resume=getattr(args, "resume", False),
                 ),
                 callbacks,
             )
@@ -841,6 +842,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Eject disc when done")
     p.add_argument("--dry-run", action="store_true",
                    help="Show what would be done without accessing the disc")
+    p.add_argument("--resume", action="store_true",
+                   help="Skip stages whose output is already present (image, WAVs, encoded files, cover art, extras)")
     p.add_argument("--debug", action="store_true",
                    help="Print subprocess commands and verbose output")
     p.add_argument("--version", action="version", version=f"discvault {__version__}")

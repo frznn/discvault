@@ -40,6 +40,7 @@ def encode_tracks(
     debug: bool = False,
     progress_callback=None,  # Callable[[int, int], None] | None
     track_total_hint: int | None = None,
+    skip_existing: bool = False,
 ) -> bool:
     """
     Encode or copy all WAV tracks to the requested output formats. Pass None to skip a format.
@@ -71,6 +72,22 @@ def encode_tracks(
         nonlocal failed, completed
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
             futures = {}
+
+            def _submit(out: Path, fn, *args) -> None:
+                if skip_existing and _is_nonempty_file(out):
+                    # Output already present — count it as a no-op so the
+                    # progress total still matches and the on_complete callback
+                    # ticks. The encoded file stays on disk.
+                    nonlocal completed
+                    completed += 1
+                    if on_complete is not None:
+                        on_complete(completed, total)
+                    return
+                if cleanup:
+                    cleanup.track_file(out)
+                f = pool.submit(fn, *args)
+                futures[f] = out.name
+
             for wav in wav_files:
                 track_num = _track_num_from_wav(wav)
                 track_total = resolved_track_total
@@ -79,91 +96,56 @@ def encode_tracks(
                 track_artist = track_meta.artist if track_meta else ""
 
                 if flac_dir is not None:
-                    out = flac_dir / track_filename(
-                        track_num, track_total, track_title, "flac"
-                    )
-                    if cleanup:
-                        cleanup.track_file(out)
-                    f = pool.submit(
-                        _encode_flac,
+                    out = flac_dir / track_filename(track_num, track_total, track_title, "flac")
+                    _submit(
+                        out, _encode_flac,
                         wav, out, meta, track_num, track_total,
                         track_title, track_artist, flac_compression, flac_verify, debug,
                     )
-                    futures[f] = out.name
 
                 if mp3_dir is not None:
-                    out = mp3_dir / track_filename(
-                        track_num, track_total, track_title, "mp3"
-                    )
-                    if cleanup:
-                        cleanup.track_file(out)
-                    f = pool.submit(
-                        _encode_mp3,
+                    out = mp3_dir / track_filename(track_num, track_total, track_title, "mp3")
+                    _submit(
+                        out, _encode_mp3,
                         wav, out, meta, track_num, track_total,
                         track_title, track_artist, mp3_quality, mp3_bitrate, debug,
                     )
-                    futures[f] = out.name
 
                 if ogg_dir is not None:
-                    out = ogg_dir / track_filename(
-                        track_num, track_total, track_title, "ogg"
-                    )
-                    if cleanup:
-                        cleanup.track_file(out)
-                    f = pool.submit(
-                        _encode_ogg,
+                    out = ogg_dir / track_filename(track_num, track_total, track_title, "ogg")
+                    _submit(
+                        out, _encode_ogg,
                         wav, out, meta, track_num, track_total,
                         track_title, track_artist, ogg_quality, debug,
                     )
-                    futures[f] = out.name
 
                 if opus_dir is not None:
-                    out = opus_dir / track_filename(
-                        track_num, track_total, track_title, "opus"
-                    )
-                    if cleanup:
-                        cleanup.track_file(out)
-                    f = pool.submit(
-                        _encode_opus,
+                    out = opus_dir / track_filename(track_num, track_total, track_title, "opus")
+                    _submit(
+                        out, _encode_opus,
                         wav, out, meta, track_num, track_total,
                         track_title, track_artist, opus_bitrate, debug,
                     )
-                    futures[f] = out.name
 
                 if alac_dir is not None:
-                    out = alac_dir / track_filename(
-                        track_num, track_total, track_title, "m4a"
-                    )
-                    if cleanup:
-                        cleanup.track_file(out)
-                    f = pool.submit(
-                        _encode_alac,
+                    out = alac_dir / track_filename(track_num, track_total, track_title, "m4a")
+                    _submit(
+                        out, _encode_alac,
                         wav, out, meta, track_num, track_total,
                         track_title, track_artist, debug,
                     )
-                    futures[f] = out.name
 
                 if aac_dir is not None:
-                    out = aac_dir / track_filename(
-                        track_num, track_total, track_title, "m4a"
-                    )
-                    if cleanup:
-                        cleanup.track_file(out)
-                    f = pool.submit(
-                        _encode_aac,
+                    out = aac_dir / track_filename(track_num, track_total, track_title, "m4a")
+                    _submit(
+                        out, _encode_aac,
                         wav, out, meta, track_num, track_total,
                         track_title, track_artist, aac_bitrate, debug,
                     )
-                    futures[f] = out.name
 
                 if wav_dir is not None:
-                    out = wav_dir / track_filename(
-                        track_num, track_total, track_title, "wav"
-                    )
-                    if cleanup:
-                        cleanup.track_file(out)
-                    f = pool.submit(_copy_wav, wav, out)
-                    futures[f] = out.name
+                    out = wav_dir / track_filename(track_num, track_total, track_title, "wav")
+                    _submit(out, _copy_wav, wav, out)
 
             for future in as_completed(futures):
                 name = futures[future]

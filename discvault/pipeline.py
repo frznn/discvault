@@ -59,6 +59,9 @@ class BackupRunRequest:
     extras_mount_root: Path | None = None
     # When set, overrides the auto-generated album_root path.
     album_root_override: Path | None = None
+    # When True, stages skip work whose output is already present (and non-empty)
+    # in the album root or work_dir, instead of re-running it. Used by --resume / TUI Resume.
+    resume: bool = False
 
 
 @dataclass
@@ -145,122 +148,140 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
     if outputs.image:
         tool = cfg.image_ripper
         tool_label = "readom" if tool == "readom" else "cdrdao"
-        _info(callbacks, f"Creating disc image ({tool_label})...")
-        _stage_start(callbacks, "image", f"Creating disc image ({tool_label})...", disc_info.track_count or None)
         stem = library.image_stem(request.artist, request.album, request.year)
         cleanup.track_dir(album_root, created=not album_root_existed)
         img_dir_existed = img_dir.exists()
         img_dir.mkdir(parents=True, exist_ok=True)
         cleanup.track_dir(img_dir, created=not img_dir_existed)
-        stem = library.unique_image_stem(img_dir, stem)
-        bin_path = img_dir / f"{stem}.bin"
 
-        if tool == "readom":
-            toc_path = None
-            ok, rip_detail = rip_mod.rip_image_readom(
-                request.device,
-                bin_path,
-                disc_info,
-                cleanup,
-                debug=enc.debug,
-                process_callback=lambda proc: _set_process(callbacks, proc),
-                progress_callback=_progress_callback(callbacks, "image"),
-            )
+        existing = _existing_image_artifacts(img_dir, stem) if request.resume else None
+        if existing is not None:
+            bin_path, cue_path, toc_path = existing
+            _info(callbacks, f"Disc image already present, reusing ({bin_path.name}).")
+            _stage_done(callbacks, "image", "✓ Disc image (reused)")
+            if outputs.iso:
+                existing_iso = img_dir / f"{stem}.iso"
+                if existing_iso.exists() and existing_iso.stat().st_size > 0:
+                    iso_path = existing_iso
+                    _info(callbacks, f"ISO already present, reusing ({iso_path.name}).")
+                    _stage_done(callbacks, "iso", "✓ ISO data image (reused)")
+                else:
+                    _stage_start(callbacks, "iso", "Exporting ISO data image...", None)
+                    iso_path = _export_iso(
+                        img_dir, stem, bin_path, disc_info, toc_path, cleanup, callbacks
+                    )
         else:
-            toc_path = img_dir / f"{stem}.toc"
-            ok, rip_detail = rip_mod.rip_image(
-                request.device,
-                toc_path,
-                bin_path,
-                cleanup,
-                command_template=cfg.cdrdao_command,
-                debug=enc.debug,
-                process_callback=lambda proc: _set_process(callbacks, proc),
-                progress_callback=_progress_callback(callbacks, "image"),
-                track_count=disc_info.track_count,
-                track_offsets=disc_info.track_offsets,
-                leadout=disc_info.leadout,
-            )
-        _set_process(callbacks, None)
-        if not ok:
-            msg = f"Disc image failed ({tool_label}): {rip_detail}" if rip_detail else f"Disc image failed ({tool_label})"
-            raise BackupRunError(f"{IMAGE_RIP_ERROR_PREFIX}{msg}")
-        _success(callbacks, "Disc image created.")
-        _stage_done(callbacks, "image", "✓ Disc image")
+            _info(callbacks, f"Creating disc image ({tool_label})...")
+            _stage_start(callbacks, "image", f"Creating disc image ({tool_label})...", disc_info.track_count or None)
+            stem = library.unique_image_stem(img_dir, stem)
+            bin_path = img_dir / f"{stem}.bin"
 
-        if toc_path is not None:
-            cue_path = img_dir / f"{stem}.cue"
-            try:
-                rip_mod.write_cue_file(cue_path, bin_path, disc_info, toc_path=toc_path, cleanup=cleanup)
-            except OSError as exc:
-                raise BackupRunError(f"Failed to write CUE sidecar: {exc}") from exc
-            _success(callbacks, f"CUE sidecar saved: {cue_path.name}")
-        else:
-            # readom: synthesize CUE from disc_info (no .toc available)
-            cue_path = img_dir / f"{stem}.cue"
-            try:
-                rip_mod.write_cue_file(cue_path, bin_path, disc_info, toc_path=None, cleanup=cleanup)
-            except OSError as exc:
-                _warn(callbacks, f"Could not write CUE sidecar: {exc}")
-                cue_path = None
+            if tool == "readom":
+                toc_path = None
+                ok, rip_detail = rip_mod.rip_image_readom(
+                    request.device,
+                    bin_path,
+                    disc_info,
+                    cleanup,
+                    debug=enc.debug,
+                    process_callback=lambda proc: _set_process(callbacks, proc),
+                    progress_callback=_progress_callback(callbacks, "image"),
+                )
             else:
+                toc_path = img_dir / f"{stem}.toc"
+                ok, rip_detail = rip_mod.rip_image(
+                    request.device,
+                    toc_path,
+                    bin_path,
+                    cleanup,
+                    command_template=cfg.cdrdao_command,
+                    debug=enc.debug,
+                    process_callback=lambda proc: _set_process(callbacks, proc),
+                    progress_callback=_progress_callback(callbacks, "image"),
+                    track_count=disc_info.track_count,
+                    track_offsets=disc_info.track_offsets,
+                    leadout=disc_info.leadout,
+                )
+            _set_process(callbacks, None)
+            if not ok:
+                msg = f"Disc image failed ({tool_label}): {rip_detail}" if rip_detail else f"Disc image failed ({tool_label})"
+                raise BackupRunError(f"{IMAGE_RIP_ERROR_PREFIX}{msg}")
+            _success(callbacks, "Disc image created.")
+            _stage_done(callbacks, "image", "✓ Disc image")
+
+            if toc_path is not None:
+                cue_path = img_dir / f"{stem}.cue"
+                try:
+                    rip_mod.write_cue_file(cue_path, bin_path, disc_info, toc_path=toc_path, cleanup=cleanup)
+                except OSError as exc:
+                    raise BackupRunError(f"Failed to write CUE sidecar: {exc}") from exc
                 _success(callbacks, f"CUE sidecar saved: {cue_path.name}")
-
-        if outputs.iso:
-            _info(callbacks, "Exporting ISO data image...")
-            _stage_start(callbacks, "iso", "Exporting ISO data image...", None)
-            iso_path = img_dir / f"{stem}.iso"
-            exported_iso, detail = rip_mod.export_iso_from_bin(
-                iso_path,
-                bin_path,
-                disc_info,
-                toc_path=toc_path,
-                cleanup=cleanup,
-                progress_callback=_progress_callback(callbacks, "iso"),
-            )
-            if exported_iso is not None:
-                iso_path = exported_iso
-                _success(callbacks, f"ISO saved: {iso_path.name}")
-                _stage_done(callbacks, "iso", "✓ ISO data image")
             else:
-                iso_path = None
-                _warn(callbacks, detail)
-                _stage_done(callbacks, "iso", "✓ ISO skipped")
+                # readom: synthesize CUE from disc_info (no .toc available)
+                cue_path = img_dir / f"{stem}.cue"
+                try:
+                    rip_mod.write_cue_file(cue_path, bin_path, disc_info, toc_path=None, cleanup=cleanup)
+                except OSError as exc:
+                    _warn(callbacks, f"Could not write CUE sidecar: {exc}")
+                    cue_path = None
+                else:
+                    _success(callbacks, f"CUE sidecar saved: {cue_path.name}")
+
+            if outputs.iso:
+                _info(callbacks, "Exporting ISO data image...")
+                _stage_start(callbacks, "iso", "Exporting ISO data image...", None)
+                iso_path = _export_iso(
+                    img_dir, stem, bin_path, disc_info, toc_path, cleanup, callbacks
+                )
 
     # Audio extraction
     if audio_formats:
-        _info(callbacks, "Ripping audio tracks...")
-        _stage_start(callbacks, "rip", "Ripping audio tracks...", len(request.selected_tracks) or None)
-        wav_files, rip_detail = rip_mod.rip_audio(
-            request.device,
-            work_dir,
-            disc_info.track_count,
-            cleanup,
-            debug=enc.debug,
-            progress_callback=_audio_progress_callback(callbacks),
-            process_callback=lambda proc: _set_process(callbacks, proc),
-            selected_tracks=request.selected_tracks,
-            sample_offset=cfg.cdparanoia_sample_offset,
+        existing_wavs = (
+            _existing_wav_files(work_dir, disc_info.track_count, request.selected_tracks)
+            if request.resume
+            else None
         )
-        _set_process(callbacks, None)
-        if wav_files is None:
-            raise BackupRunError(f"Audio track extraction failed: {rip_detail}" if rip_detail else "Failed to rip audio tracks")
-        _success(callbacks, "Audio tracks ripped.")
-        _stage_done(callbacks, "rip", "✓ Audio tracks")
+        if existing_wavs is not None:
+            wav_files = existing_wavs
+            _info(callbacks, f"Audio WAVs already present in work_dir, reusing {len(wav_files)} file(s).")
+            _stage_done(callbacks, "rip", "✓ Audio tracks (reused)")
+            # AccurateRip on reused WAVs is a no-op for the user — the prior run already
+            # verified them, and re-verifying produces the same answer.
+            if cfg.accuraterip_enabled:
+                _info(callbacks, "AccurateRip skipped on reuse (already verified in the prior run).")
+        else:
+            _info(callbacks, "Ripping audio tracks...")
+            _stage_start(callbacks, "rip", "Ripping audio tracks...", len(request.selected_tracks) or None)
+            wav_files, rip_detail = rip_mod.rip_audio(
+                request.device,
+                work_dir,
+                disc_info.track_count,
+                cleanup,
+                debug=enc.debug,
+                progress_callback=_audio_progress_callback(callbacks),
+                process_callback=lambda proc: _set_process(callbacks, proc),
+                selected_tracks=request.selected_tracks,
+                sample_offset=cfg.cdparanoia_sample_offset,
+            )
+            _set_process(callbacks, None)
+            if wav_files is None:
+                raise BackupRunError(f"Audio track extraction failed: {rip_detail}" if rip_detail else "Failed to rip audio tracks")
+            _success(callbacks, "Audio tracks ripped.")
+            _stage_done(callbacks, "rip", "✓ Audio tracks")
 
-        if cfg.accuraterip_enabled:
-            _info(callbacks, "Running AccurateRip verification...")
-            if cfg.cdparanoia_sample_offset == 0:
-                _warn(
-                    callbacks,
-                    "AccurateRip is enabled with sample offset 0. Set your drive offset for more reliable results.",
-                )
-            verified, detail = verify_mod.verify_accuraterip(wav_files, debug=enc.debug)
-            accuraterip_detail = detail
-            if verified is True:
-                _success(callbacks, detail)
-            else:
-                _warn(callbacks, detail)
+            if cfg.accuraterip_enabled:
+                _info(callbacks, "Running AccurateRip verification...")
+                if cfg.cdparanoia_sample_offset == 0:
+                    _warn(
+                        callbacks,
+                        "AccurateRip is enabled with sample offset 0. Set your drive offset for more reliable results.",
+                    )
+                verified, detail = verify_mod.verify_accuraterip(wav_files, debug=enc.debug)
+                accuraterip_detail = detail
+                if verified is True:
+                    _success(callbacks, detail)
+                else:
+                    _warn(callbacks, detail)
 
         cleanup.track_dir(album_root, created=not album_root_existed)
 
@@ -293,6 +314,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
                 debug=enc.debug,
                 progress_callback=_encode_progress_callback(callbacks, fmt_key, stage_label),
                 track_total_hint=request.meta.track_count or disc_info.track_count or None,
+                skip_existing=request.resume,
             )
             if not ok:
                 raise BackupRunError(f"Encoding to {fmt_name} format failed.")
@@ -301,20 +323,30 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
 
     cover_art_enabled = request.cover_art_enabled
     if cover_art_enabled:
-        _info(callbacks, f"Cover art: {artwork_mod.describe_cover_art(request.meta, enabled=True)}")
-        cover_art_path = artwork_mod.download_cover_art(
-            request.meta,
-            album_root,
-            cleanup=cleanup,
-            timeout=cfg.metadata_timeout,
-            debug=enc.debug,
-        )
-        if cover_art_path is not None:
-            _success(callbacks, f"Cover art saved: {cover_art_path.name}")
+        existing_cover = _existing_cover_art(album_root) if request.resume else None
+        if existing_cover is not None:
+            cover_art_path = existing_cover
+            _info(callbacks, f"Cover art already present, reusing ({cover_art_path.name}).")
         else:
-            _warn(callbacks, "Cover art not downloaded.")
+            _info(callbacks, f"Cover art: {artwork_mod.describe_cover_art(request.meta, enabled=True)}")
+            cover_art_path = artwork_mod.download_cover_art(
+                request.meta,
+                album_root,
+                cleanup=cleanup,
+                timeout=cfg.metadata_timeout,
+                debug=enc.debug,
+            )
+            if cover_art_path is not None:
+                _success(callbacks, f"Cover art saved: {cover_art_path.name}")
+            else:
+                _warn(callbacks, "Cover art not downloaded.")
 
     extra_paths = list(dict.fromkeys(path for path in request.selected_extra_paths if path))
+    if extra_paths and request.resume and _existing_extras_present(ex_dir):
+        _info(callbacks, f"Extras already present in {ex_dir.name}, reusing.")
+        copied_extra_paths = sorted(p for p in ex_dir.iterdir() if p.is_file())
+        _stage_done(callbacks, "extras", "✓ Extra files (reused)")
+        extra_paths = []
     if extra_paths:
         cleanup.track_dir(album_root, created=not album_root_existed)
         _info(callbacks, f"Saving {len(extra_paths)} extra file(s)...")
@@ -549,6 +581,103 @@ def write_backup_info(
         info_path.write_text("\n".join(lines) + "\n")
     except OSError as exc:
         _warn_raw(warn, f"Could not write backup-info.txt: {exc}")
+
+
+def _existing_image_artifacts(
+    img_dir: Path, preferred_stem: str
+) -> tuple[Path, Path, Path | None] | None:
+    """Detect a usable disc image already on disk for resume.
+
+    Returns ``(bin_path, cue_path, toc_path)`` when a non-empty BIN with a
+    matching CUE sidecar exists in ``img_dir``. ``toc_path`` may be ``None`` for
+    readom-produced images (no .toc on disk). Tries the preferred stem first,
+    then any BIN+CUE pair.
+    """
+    if not img_dir.is_dir():
+        return None
+
+    def _candidate(stem: str) -> tuple[Path, Path, Path | None] | None:
+        bin_path = img_dir / f"{stem}.bin"
+        cue_path = img_dir / f"{stem}.cue"
+        if not bin_path.exists() or bin_path.stat().st_size == 0:
+            return None
+        if not cue_path.exists() or cue_path.stat().st_size == 0:
+            return None
+        toc_path = img_dir / f"{stem}.toc"
+        return bin_path, cue_path, toc_path if toc_path.exists() else None
+
+    found = _candidate(preferred_stem)
+    if found is not None:
+        return found
+    for bin_file in sorted(img_dir.glob("*.bin")):
+        candidate = _candidate(bin_file.stem)
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def _export_iso(
+    img_dir: Path,
+    stem: str,
+    bin_path: Path,
+    disc_info: DiscInfo,
+    toc_path: Path | None,
+    cleanup: Cleanup,
+    callbacks: BackupCallbacks,
+) -> Path | None:
+    from . import rip as rip_mod
+
+    iso_path = img_dir / f"{stem}.iso"
+    exported_iso, detail = rip_mod.export_iso_from_bin(
+        iso_path,
+        bin_path,
+        disc_info,
+        toc_path=toc_path,
+        cleanup=cleanup,
+        progress_callback=_progress_callback(callbacks, "iso"),
+    )
+    if exported_iso is not None:
+        _success(callbacks, f"ISO saved: {exported_iso.name}")
+        _stage_done(callbacks, "iso", "✓ ISO data image")
+        return exported_iso
+    _warn(callbacks, detail)
+    _stage_done(callbacks, "iso", "✓ ISO skipped")
+    return None
+
+
+def _existing_extras_present(extras_dir: Path) -> bool:
+    """True when ``extras_dir`` exists and already contains at least one file."""
+    if not extras_dir.is_dir():
+        return False
+    return any(p.is_file() for p in extras_dir.iterdir())
+
+
+def _existing_cover_art(album_root: Path) -> Path | None:
+    """Return the cover-art file already present in ``album_root``, or None."""
+    if not album_root.is_dir():
+        return None
+    for ext in ("jpg", "jpeg", "png", "webp"):
+        candidate = album_root / f"cover.{ext}"
+        if candidate.exists() and candidate.stat().st_size > 0:
+            return candidate
+    return None
+
+
+def _existing_wav_files(
+    work_dir: Path, track_total: int, selected_tracks: list[int]
+) -> list[Path] | None:
+    """Return the WAV files in ``work_dir`` for resume, or None if any are missing.
+
+    Naming matches ``rip_audio``'s ``_wav_name_for_track`` so reuse is exact.
+    """
+    from .rip import _is_nonempty_file, _wav_name_for_track
+
+    if not work_dir.is_dir() or not selected_tracks:
+        return None
+    candidates = [work_dir / _wav_name_for_track(num, track_total) for num in selected_tracks]
+    if all(_is_nonempty_file(p) for p in candidates):
+        return candidates
+    return None
 
 
 def _audio_formats(outputs: OutputSelection) -> list[tuple[str, str]]:

@@ -45,6 +45,7 @@ _discvault() {
   "--keep-wav[Keep intermediate WAV files]" \
   "--eject[Eject disc when done]" \
   "--dry-run[Show what would be done without accessing the disc]" \
+  "--resume[Skip stages whose output is already present (image, WAVs, encoded files, cover art, extras)]" \
   "--debug[Print subprocess commands and verbose output]" \
   "--version[show program's version number and exit]"
 }
