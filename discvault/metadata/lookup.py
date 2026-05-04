@@ -179,7 +179,7 @@ def fetch_candidates(
                 _skip("Discogs", "no search terms")
         else:
             _skip("Discogs", "disabled in Manual Search")
-        return results
+        return _finalize_candidates(results, cfg)
 
     short_circuit = bool(getattr(cfg, "lookup_stop_at_first_match", True))
 
@@ -191,7 +191,7 @@ def fetch_candidates(
     elif cfg.use_local_cddb_cache:
         _skip("Local CDDB cache", "no FreeDB disc ID")
     if short_circuit and len(results) > cache_before:
-        return results
+        return _finalize_candidates(results, cfg)
 
     for key in ordered_sources:
         before = len(results)
@@ -248,10 +248,21 @@ def fetch_candidates(
         if short_circuit and len(results) > before:
             break
 
+    return _finalize_candidates(results, cfg)
+
+
+def _finalize_candidates(results: list[Metadata], cfg: Config) -> list[Metadata]:
+    """Apply post-collection mutations (track-artist blanking) and return ``results``.
+
+    Called from every ``fetch_candidates`` return point so all paths
+    (manual-search, cache short-circuit, full priority loop) share the same
+    finalization. The bug this routes around: prior to the helper the blanker
+    only ran at the bottom return, so manual search and cache hits leaked
+    pre-blank tracks into the candidate list.
+    """
     if cfg.blank_redundant_track_artist:
         for meta in results:
             _blank_redundant_track_artists(meta)
-
     return results
 
 

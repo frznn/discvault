@@ -500,6 +500,47 @@ class BlankRedundantTrackArtistsConfigTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual([t.artist for t in results[0].tracks], ["Artist", "Artist"])
 
+    def test_manual_search_path_also_blanks_redundant_artists(self) -> None:
+        # Regression: the manual-search early return previously skipped the
+        # blanker, leaking pre-blank tracks into the candidate list.
+        cfg = self._make_cfg(toggle=True)
+        with patch(
+            "discvault.metadata.musicbrainz.search_releases",
+            return_value=[self._seeded_meta()],
+        ):
+            results = fetch_candidates(
+                self._disc_info(),
+                cfg,
+                sources={"musicbrainz": True, "discogs": False},
+                manual_query="Artist Album",
+                manual_hints=("Artist", "Album", ""),
+                manual_search=True,
+            )
+        self.assertEqual(len(results), 1)
+        self.assertEqual([t.artist for t in results[0].tracks], ["", ""])
+
+    def test_cache_short_circuit_path_also_blanks_redundant_artists(self) -> None:
+        # Regression: the local-cache short-circuit return previously skipped
+        # the blanker.
+        cfg = self._make_cfg(toggle=True)
+        cfg.use_local_cddb_cache = True
+        disc_info = DiscInfo(
+            device="/dev/cdrom",
+            track_count=2,
+            freedb_disc_id="abcdef01",
+        )
+        with patch(
+            "discvault.metadata.local.lookup",
+            return_value=[self._seeded_meta()],
+        ):
+            results = fetch_candidates(
+                disc_info,
+                cfg,
+                sources={"cdtext": False, "musicbrainz": False, "gnudb": False},
+            )
+        self.assertEqual(len(results), 1)
+        self.assertEqual([t.artist for t in results[0].tracks], ["", ""])
+
 
 if __name__ == "__main__":
     unittest.main()
