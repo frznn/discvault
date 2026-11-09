@@ -692,7 +692,23 @@ class DiscvaultApp(App[None]):
         self._refresh_output_button()
         self._refresh_extras_button()
         self._refresh_import_buttons()
+        self._warn_missing_tools()
         self._start_detection(self._sources_dict())
+
+    def _missing_tools(self) -> tuple:
+        """Tools the currently selected outputs need that are not installed."""
+        from .. import deps as deps_mod
+
+        return deps_mod.missing_for_outputs(
+            self._outputs_dict(), image_ripper=self._cfg.image_ripper
+        )
+
+    def _warn_missing_tools(self) -> None:
+        """Log missing tools up front so a rip does not fail partway through."""
+        from .. import deps as deps_mod
+
+        for line in deps_mod.format_missing(self._missing_tools()):
+            self._log(f"[yellow]![/yellow] {line}")
 
     def on_worker_state_changed(self, event) -> None:
         from textual.worker import WorkerState
@@ -2541,6 +2557,14 @@ class DiscvaultApp(App[None]):
             return
         if do_iso and not do_image:
             self._log("[yellow]![/yellow] ISO export requires Disc image.")
+            return
+        missing = self._missing_tools()
+        if missing:
+            from .. import deps as deps_mod
+
+            self._log("[red]✗[/red] Cannot start: required tools are missing.")
+            for line in deps_mod.format_missing(missing):
+                self._log(f"[yellow]![/yellow] {line}")
             return
         if not any((do_image, do_flac, do_mp3, do_ogg, do_opus, do_alac, do_aac, do_wav)) and not selected_extra_paths:
             self._log("[yellow]![/yellow] Enable at least one output or select extra files.")

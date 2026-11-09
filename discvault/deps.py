@@ -325,6 +325,46 @@ def build_dependency_report(
     )
 
 
+def missing_for_outputs(
+    outputs: dict[str, bool],
+    *,
+    image_ripper: str = "cdrdao",
+    which=shutil.which,
+    os_release_text: str | None = None,
+) -> tuple[DependencyStatus, ...]:
+    """Return the unavailable tools needed by the selected outputs.
+
+    `outputs` uses the TUI's keys (image, iso, flac, mp3, ogg, opus, alac,
+    aac, wav). Only tools the selection actually needs are checked, so the
+    caller can warn before a rip starts instead of failing partway through.
+    """
+    package_manager = detect_package_manager(os_release_text)
+    keys: list[str] = []
+    if outputs.get("image"):
+        keys.append("readom" if image_ripper == "readom" else "cdrdao")
+    if any(outputs.get(k) for k in ("flac", "mp3", "ogg", "opus", "alac", "aac", "wav")):
+        keys.append("cdparanoia")
+    for out_key, spec_key in (("flac", "flac"), ("mp3", "lame"), ("ogg", "oggenc"), ("opus", "opusenc")):
+        if outputs.get(out_key):
+            keys.append(spec_key)
+    if outputs.get("alac") or outputs.get("aac"):
+        keys.append("ffmpeg")
+    statuses = (
+        _check_dependency(_DEPENDENCY_SPECS[key], True, which, package_manager)
+        for key in keys
+    )
+    return tuple(item for item in statuses if not item.available)
+
+
+def format_missing(missing: tuple[DependencyStatus, ...]) -> list[str]:
+    """One line per missing tool: the feature it blocks and how to install it."""
+    return [
+        f"{item.spec.label}: missing ({'/'.join(item.spec.commands)})"
+        + (f". {item.install_hint}" if item.install_hint else "")
+        for item in missing
+    ]
+
+
 def dependency_exit_code(report: DependencyReport) -> int:
     return 1 if any(not item.available for item in report.required) else 0
 

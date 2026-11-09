@@ -171,5 +171,38 @@ class DistroDetectionTests(unittest.TestCase):
         )
 
 
+class MissingForOutputsTests(unittest.TestCase):
+    def test_image_rip_without_cdrdao_names_the_feature_and_package(self) -> None:
+        missing = deps_mod.missing_for_outputs(
+            {"image": True},
+            which=_which_from(set()),
+            os_release_text="ID=ubuntu\n",
+        )
+        self.assertEqual([m.spec.key for m in missing], ["cdrdao"])
+        line = deps_mod.format_missing(missing)[0]
+        self.assertIn("Disc image ripping", line)
+        self.assertIn("sudo apt install cdrdao", line)
+
+    def test_only_selected_outputs_are_checked(self) -> None:
+        missing = deps_mod.missing_for_outputs(
+            {"flac": True},
+            which=_which_from({"cdparanoia"}),
+        )
+        self.assertEqual([m.spec.key for m in missing], ["flac"])
+
+    def test_nothing_missing_when_tools_present(self) -> None:
+        missing = deps_mod.missing_for_outputs(
+            {"image": True, "mp3": True},
+            which=_which_from({"cdrdao", "cdparanoia", "lame"}),
+        )
+        self.assertEqual(missing, ())
+
+    def test_readom_ripper_checks_readom(self) -> None:
+        missing = deps_mod.missing_for_outputs(
+            {"image": True}, image_ripper="readom", which=_which_from({"cdrdao"})
+        )
+        self.assertEqual([m.spec.key for m in missing], ["readom"])
+
+
 if __name__ == "__main__":
     unittest.main()

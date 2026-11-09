@@ -6,6 +6,10 @@ The project history starts at `v0.1`.
 
 ## [Unreleased]
 
+### Added
+
+- The TUI now checks, at startup and again before a rip, that the tools the selected outputs need are installed. Missing tools are logged with the feature they block and the install command, and a rip does not start until they are present, instead of failing partway through.
+
 ## [0.4] - 2026-04-30
 
 ### Added
