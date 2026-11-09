@@ -79,6 +79,8 @@ class Config:
     prefer_release_year: bool = False  # False = prefer first-release year (default)
     manual_src_musicbrainz: bool = True
     manual_src_discogs: bool = True
+    # False: Manual Search drops results that diverge from a filled field.
+    manual_include_diverging: bool = False
     use_local_cddb_cache: bool = True
     accuraterip_enabled: bool = False
     download_cover_art: bool = True
@@ -190,6 +192,10 @@ class Config:
         cfg.manual_src_discogs = _as_bool(
             dv.get("manual_src_discogs"),
             cfg.manual_src_discogs,
+        )
+        cfg.manual_include_diverging = _as_bool(
+            dv.get("manual_include_diverging"),
+            cfg.manual_include_diverging,
         )
         cfg.use_local_cddb_cache = _as_bool(
             dv.get("use_local_cddb_cache", cfg.use_local_cddb_cache),
@@ -305,6 +311,7 @@ class Config:
             f"prefer_release_year = {str(self.prefer_release_year).lower()}",
             f"manual_src_musicbrainz = {str(self.manual_src_musicbrainz).lower()}",
             f"manual_src_discogs = {str(self.manual_src_discogs).lower()}",
+            f"manual_include_diverging = {str(self.manual_include_diverging).lower()}",
             f"use_local_cddb_cache = {str(self.use_local_cddb_cache).lower()}",
             f"accuraterip_enabled = {str(self.accuraterip_enabled).lower()}",
             f"download_cover_art = {str(self.download_cover_art).lower()}",

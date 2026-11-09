@@ -406,6 +406,24 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("manual_src_musicbrainz = false", saved_text)
         self.assertIn("manual_src_discogs = false", saved_text)
 
+    def test_manual_include_diverging_defaults_off_and_round_trips(self) -> None:
+        self.assertFalse(config_mod.Config().manual_include_diverging)
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            old = config_mod.CONFIG_PATH
+            config_mod.CONFIG_PATH = config_path
+            try:
+                cfg = config_mod.Config()
+                cfg.manual_include_diverging = True
+                cfg.save()
+                loaded = config_mod.Config.load()
+                saved_text = config_path.read_text()
+            finally:
+                config_mod.CONFIG_PATH = old
+
+        self.assertTrue(loaded.manual_include_diverging)
+        self.assertIn("manual_include_diverging = true", saved_text)
+
     def test_manual_search_source_toggles_default_to_true_when_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"

@@ -50,7 +50,14 @@ Discogs is manual-search-only. It is not part of normal automatic metadata looku
 
 The TUI Manual Search dialog lets you toggle MusicBrainz and Discogs independently of the automatic source toggles. The chosen state is persisted as `manual_src_musicbrainz` and `manual_src_discogs` in the config file and reused on subsequent searches.
 
-If you leave the Manual Search prompt empty, DiscVault falls back to the current Artist/Album/Year fields as the search text.
+The dialog has a free-text box plus **Artist**, **Album**, **Year** and **Tracks** fields. On first open they are prefilled from the main screen's Artist/Album/Year fields and the disc's track count (when the disc reports one). The free text and the fields are sent to both providers together, and every filled field also filters the results from either provider:
+
+- **Artist / Album** - case- and accent-insensitive; the typed words must appear contiguously as whole words ("beatles" matches "The Beatles", "bea" does not).
+- **Year** - exact match on the release year or the first-release year.
+- **Tracks** - exact track count. A candidate with no tracklist has an unknown count and is kept.
+- A blank field is ignored.
+
+Results that diverge from a filled field are hidden, and the status log reports how many. The **Include results with diverging fields** checkbox (config `manual_include_diverging`, default off) keeps them instead, listed after the matching ones.
 
 ## Imports
 

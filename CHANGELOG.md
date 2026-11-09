@@ -9,6 +9,7 @@ The project history starts at `v0.1`.
 ### Added
 
 - The TUI now checks, at startup and again before a rip, that the tools the selected outputs need are installed. Missing tools are logged with the feature they block and the install command, and a rip does not start until they are present, instead of failing partway through.
+- Manual Search now has Artist, Album, Year and Tracks fields next to the free-text box, and the results from MusicBrainz and Discogs are filtered to match the filled fields. Diverging results are hidden unless the new `manual_include_diverging` option (also a checkbox in the dialog) is on.
 - Optional `discid` extra (`pip install 'discvault[discid]'`) for exact MusicBrainz disc IDs through libdiscid.
 
 ### Fixed

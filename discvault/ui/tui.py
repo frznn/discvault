@@ -6,7 +6,6 @@ from dataclasses import replace
 import shutil
 import subprocess
 import time
-import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -36,7 +35,7 @@ if TYPE_CHECKING:
     from ..extras import ExtraScanBundle
     from ..metadata.types import Metadata, DiscInfo
 
-from ..metadata.search import combine_search_text, search_tokens
+from ..metadata.search import combine_search_text, filter_candidates, normalize_text
 from .. import __version__
 from ..pipeline import _output_stage_label
 from ..tracks import (
@@ -331,12 +330,7 @@ def _format_duration(seconds: float) -> str:
 
 
 def _normalize_manual_search_text(value: str) -> str:
-    stripped = "".join(
-        character
-        for character in unicodedata.normalize("NFKD", value)
-        if not unicodedata.combining(character)
-    )
-    return " ".join(search_tokens(stripped.casefold()))
+    return normalize_text(value)
 
 
 def _manual_search_score(meta: "Metadata", search_text: str) -> tuple[int, int, int, int]:
@@ -597,6 +591,7 @@ class DiscvaultApp(App[None]):
         self._extras_announced_signature: tuple | None = None
         self._status_toast_timer = None
         self._metadata_search_query = ""
+        self._manual_search_filters: dict[str, str] | None = None
         self._metadata_file_path = getattr(args, "metadata_file", "") or ""
         self._metadata_url = getattr(args, "metadata_url", getattr(args, "bandcamp_url", "")) or ""
         self._auto_import_file_pending = bool(self._metadata_file_path)
@@ -897,6 +892,15 @@ class DiscvaultApp(App[None]):
 
     def _manual_search_request(self) -> tuple[str, tuple[str, str, str]]:
         search_text = self._metadata_search_query.strip()
+        filters = self._manual_search_filters
+        if filters is not None:
+            # The dialog's fields steer the providers and filter the results;
+            # the free-text query is passed alongside them, never instead.
+            return search_text, (
+                filters.get("artist", ""),
+                filters.get("album", ""),
+                filters.get("year", ""),
+            )
         if search_text:
             return search_text, ("", "", "")
 
@@ -1555,7 +1559,31 @@ class DiscvaultApp(App[None]):
                 album=hint_album,
                 year=hint_year,
             )
-            candidates = _sort_manual_search_candidates(candidates, search_text)
+            filters = self._manual_search_filters or {}
+            tracks_text = filters.get("tracks", "")
+            matching = filter_candidates(
+                candidates,
+                artist=filters.get("artist", ""),
+                album=filters.get("album", ""),
+                year=filters.get("year", ""),
+                track_count=int(tracks_text) if tracks_text.isdigit() else 0,
+            )
+            diverging = [meta for meta in candidates if meta not in matching]
+            matching = _sort_manual_search_candidates(matching, search_text)
+            if not diverging:
+                candidates = matching
+            elif cfg.manual_include_diverging:
+                # Diverging results stay, listed after the ones that match.
+                self._tlog(
+                    f"[dim]  · {len(diverging)} candidate(s) diverge from the search fields; listed last[/dim]"
+                )
+                candidates = matching + _sort_manual_search_candidates(diverging, search_text)
+            else:
+                self._tlog(
+                    f"[dim]  · {len(diverging)} candidate(s) hidden: they diverge from the search fields. "
+                    "Enable 'Include results with diverging fields' in Manual Search to see them.[/dim]"
+                )
+                candidates = matching
 
         self._candidates = candidates
         offer_manual_search = False
@@ -2151,11 +2179,28 @@ class DiscvaultApp(App[None]):
     def _open_manual_search(self) -> None:
         if self.phase == "running" or self._operation_busy:
             return
+        filters = self._manual_search_filters
+        if filters is None:
+            # First open: seed from the main screen's fields and the disc's
+            # own track count (0 when no TOC tool reported one).
+            artist, album, year = self._manual_search_hints()
+            known = self._disc_info.track_count if self._disc_info else 0
+            filters = {
+                "artist": artist,
+                "album": album,
+                "year": year,
+                "tracks": str(known) if known > 0 else "",
+            }
         self.push_screen(
             ManualSearchScreen(
                 value=self._metadata_search_query,
+                artist=filters.get("artist", ""),
+                album=filters.get("album", ""),
+                year=filters.get("year", ""),
+                tracks=filters.get("tracks", ""),
                 musicbrainz=self._cfg.manual_src_musicbrainz,
                 discogs=self._cfg.manual_src_discogs,
+                include_diverging=self._cfg.manual_include_diverging,
             ),
             self._apply_manual_search_prompt,
         )
@@ -2437,12 +2482,19 @@ class DiscvaultApp(App[None]):
         mb = bool(result.get("musicbrainz", self._cfg.manual_src_musicbrainz))
         discogs = bool(result.get("discogs", self._cfg.manual_src_discogs))
         self._metadata_search_query = query
+        self._manual_search_filters = {
+            key: str(result.get(key, "")).strip()
+            for key in ("artist", "album", "year", "tracks")
+        }
+        include = bool(result.get("include_diverging", self._cfg.manual_include_diverging))
         if (
             self._cfg.manual_src_musicbrainz != mb
             or self._cfg.manual_src_discogs != discogs
+            or self._cfg.manual_include_diverging != include
         ):
             self._cfg.manual_src_musicbrainz = mb
             self._cfg.manual_src_discogs = discogs
+            self._cfg.manual_include_diverging = include
             try:
                 self._cfg.save()
             except OSError as exc:
@@ -3245,6 +3297,7 @@ class DiscvaultApp(App[None]):
         self._candidates = []
         self._manual_meta = None
         self._metadata_search_query = ""
+        self._manual_search_filters = None
         self._selected_idx = 0
         self._selected_tracks = {}
         self._clear_extras_state()
@@ -3451,6 +3504,7 @@ class DiscvaultApp(App[None]):
         self._candidates = []
         self._manual_meta = None
         self._metadata_search_query = ""
+        self._manual_search_filters = None
         self._selected_idx = 0
         self._selected_tracks = {}
         self._clear_extras_state()

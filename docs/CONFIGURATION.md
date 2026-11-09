@@ -35,6 +35,7 @@ lookup_log_timings = false
 log_to_file = false
 manual_src_musicbrainz = true
 manual_src_discogs = true
+manual_include_diverging = false
 use_local_cddb_cache = true
 
 # Audio extraction
@@ -100,6 +101,7 @@ token = ""
 | `log_to_file` | Append the TUI status log to `~/.cache/discvault/last-run.log` as it is written (default `false`). Each session is delimited by a timestamped header. |
 | `manual_src_musicbrainz` | Default state of the MusicBrainz checkbox in the Manual Search dialog (default `true`). |
 | `manual_src_discogs` | Default state of the Discogs checkbox in the Manual Search dialog (default `true`). |
+| `manual_include_diverging` | Keep Manual Search results that diverge from a filled Artist/Album/Year/Tracks field, listed after the matching ones (default `false`: they are hidden). Also the "Include results with diverging fields" checkbox in the dialog. |
 | `use_local_cddb_cache` | Check `~/.cddb` before online lookup |
 
 These defaults apply to automatic disc lookup only. Discogs is not part of the automatic source set; it is used only by Manual Search.

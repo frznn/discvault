@@ -33,9 +33,23 @@ class ManualSearchScreen(ModalScreen[dict | None]):
         margin-bottom: 1;
     }
 
-    #manual-search-input {
+    .manual-search-row {
+        height: auto;
+    }
+
+    .manual-search-field {
+        height: auto;
         width: 1fr;
         margin-bottom: 1;
+        margin-right: 1;
+    }
+
+    .manual-search-field-label {
+        color: $text-muted;
+    }
+
+    .manual-search-field Input {
+        width: 1fr;
     }
 
     #manual-search-sources-label {
@@ -69,26 +83,67 @@ class ManualSearchScreen(ModalScreen[dict | None]):
         self,
         *,
         value: str = "",
+        artist: str = "",
+        album: str = "",
+        year: str = "",
+        tracks: str = "",
         musicbrainz: bool = True,
         discogs: bool = True,
+        include_diverging: bool = False,
     ) -> None:
         super().__init__()
+        self._include_diverging = bool(include_diverging)
         self._value = value
+        self._artist = artist
+        self._album = album
+        self._year = year
+        self._tracks = tracks
         self._musicbrainz = bool(musicbrainz)
         self._discogs = bool(discogs)
+
+    @staticmethod
+    def _field(title: str, widget: Input) -> Vertical:
+        """An input with its label above it."""
+        return Vertical(
+            Label(title, classes="manual-search-field-label"),
+            widget,
+            classes="manual-search-field",
+        )
 
     def compose(self) -> ComposeResult:
         yield Vertical(
             Label("Manual Search", id="manual-search-title"),
             Label(
-                "Search by artist, album, year, or any words.",
+                "Fill in any of the fields. Artist, album, year and tracks also filter the results.",
                 id="manual-search-hint",
             ),
-            Input(
-                value=self._value,
-                placeholder="",
-                id="manual-search-input",
-                compact=True,
+            Horizontal(
+                self._field(
+                    "Artist",
+                    Input(value=self._artist, id="manual-search-artist", compact=True),
+                ),
+                self._field(
+                    "Album",
+                    Input(value=self._album, id="manual-search-album", compact=True),
+                ),
+                classes="manual-search-row",
+            ),
+            Horizontal(
+                self._field(
+                    "Year",
+                    Input(value=self._year, id="manual-search-year",
+                          max_length=4, type="integer", compact=True),
+                ),
+                self._field(
+                    "Tracks",
+                    Input(value=self._tracks, id="manual-search-tracks",
+                          max_length=3, type="integer", compact=True),
+                ),
+                classes="manual-search-row",
+            ),
+            self._field(
+                "Search words (any text)",
+                Input(value=self._value, id="manual-search-input", compact=True),
             ),
             Label("Search sources:", id="manual-search-sources-label"),
             Horizontal(
@@ -108,6 +163,12 @@ class ManualSearchScreen(ModalScreen[dict | None]):
                 ),
                 id="manual-search-sources",
             ),
+            Checkbox(
+                "Include results with diverging fields",
+                value=self._include_diverging,
+                id="manual-search-diverging",
+                compact=True,
+            ),
             Horizontal(
                 Button("Cancel", id="manual-search-cancel"),
                 Button("Search", id="manual-search-submit", variant="success"),
@@ -117,10 +178,10 @@ class ManualSearchScreen(ModalScreen[dict | None]):
         )
 
     def on_mount(self) -> None:
-        self.query_one("#manual-search-input", Input).focus()
+        self.query_one("#manual-search-artist", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "manual-search-input":
+        if (event.input.id or "").startswith("manual-search-"):
             self._submit()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -138,7 +199,14 @@ class ManualSearchScreen(ModalScreen[dict | None]):
         self.dismiss(
             {
                 "query": query,
+                "artist": self.query_one("#manual-search-artist", Input).value.strip(),
+                "album": self.query_one("#manual-search-album", Input).value.strip(),
+                "year": self.query_one("#manual-search-year", Input).value.strip(),
+                "tracks": self.query_one("#manual-search-tracks", Input).value.strip(),
                 "musicbrainz": mb,
                 "discogs": discogs,
+                "include_diverging": bool(
+                    self.query_one("#manual-search-diverging", Checkbox).value
+                ),
             }
         )
