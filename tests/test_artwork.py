@@ -126,5 +126,40 @@ class ApplyCoverArtSearchResultTests(unittest.TestCase):
         self.assertEqual(target.mb_release_id, "")
 
 
+class FetchCoverArtTests(unittest.TestCase):
+    def test_fetch_returns_first_url_that_answers(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from discvault.artwork import fetch_cover_art
+
+        meta = Metadata(
+            source="T",
+            album_artist="A",
+            album="B",
+            cover_art_url="https://example.test/bad.jpg",
+            mb_release_id="rid",
+        )
+        good = MagicMock(content=b"IMG", headers={"content-type": "image/png"})
+        good.raise_for_status.return_value = None
+        bad = MagicMock()
+        bad.raise_for_status.side_effect = RuntimeError("404")
+        with patch("discvault.artwork.requests.get", side_effect=[bad, good]) as get:
+            fetched = fetch_cover_art(meta)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched.content, b"IMG")
+        self.assertEqual(fetched.content_type, "image/png")
+        self.assertEqual(fetched.url, "https://coverartarchive.org/release/rid/front")
+        self.assertEqual(get.call_count, 2)
+
+    def test_fetch_returns_none_when_nothing_answers(self) -> None:
+        from unittest.mock import patch
+
+        from discvault.artwork import fetch_cover_art
+
+        meta = Metadata(source="T", album_artist="A", album="B", cover_art_url="https://x.test/c.jpg")
+        with patch("discvault.artwork.requests.get", side_effect=RuntimeError("down")):
+            self.assertIsNone(fetch_cover_art(meta))
+
+
 if __name__ == "__main__":
     unittest.main()

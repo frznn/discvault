@@ -1,6 +1,7 @@
 """Cover-art download helpers."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -16,15 +17,22 @@ _HEADERS = {
 }
 
 
-def download_cover_art(
+@dataclass(frozen=True)
+class FetchedCover:
+    """Cover-art bytes together with where they came from."""
+
+    url: str
+    content: bytes
+    content_type: str
+
+
+def fetch_cover_art(
     meta: Metadata,
-    album_root: Path,
     *,
-    cleanup: Cleanup | None = None,
     timeout: int = 15,
     debug: bool = False,
-) -> Path | None:
-    """Download cover art for metadata and save it under the album root."""
+) -> FetchedCover | None:
+    """Fetch the first cover-art URL of ``meta`` that answers, without touching disk."""
     for url in _candidate_urls(meta):
         try:
             response = requests.get(
@@ -38,18 +46,35 @@ def download_cover_art(
             if debug:
                 print(f"[metadata-debug] Cover-art download failed ({url}): {exc}")
             continue
-
         content_type = response.headers.get("content-type", "").lower()
-        ext = meta.cover_art_ext or _ext_from_content_type(content_type) or _ext_from_url(url)
-        if ext not in {"jpg", "jpeg", "png", "webp"}:
-            ext = "jpg"
-        art_path = album_root / f"cover.{ext}"
-        if cleanup:
-            cleanup.track_file(art_path, created=not art_path.exists())
-        art_path.write_bytes(response.content)
-        return art_path
-
+        return FetchedCover(url=url, content=response.content, content_type=content_type)
     return None
+
+
+def download_cover_art(
+    meta: Metadata,
+    album_root: Path,
+    *,
+    cleanup: Cleanup | None = None,
+    timeout: int = 15,
+    debug: bool = False,
+) -> Path | None:
+    """Download cover art for metadata and save it under the album root."""
+    fetched = fetch_cover_art(meta, timeout=timeout, debug=debug)
+    if fetched is None:
+        return None
+    ext = (
+        meta.cover_art_ext
+        or _ext_from_content_type(fetched.content_type)
+        or _ext_from_url(fetched.url)
+    )
+    if ext not in {"jpg", "jpeg", "png", "webp"}:
+        ext = "jpg"
+    art_path = album_root / f"cover.{ext}"
+    if cleanup:
+        cleanup.track_file(art_path, created=not art_path.exists())
+    art_path.write_bytes(fetched.content)
+    return art_path
 
 
 def describe_cover_art(meta: Metadata, *, enabled: bool = True) -> str:
