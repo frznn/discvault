@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -185,7 +186,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
                     cleanup,
                     debug=enc.debug,
                     process_callback=lambda proc: _set_process(callbacks, proc),
-                    progress_callback=_progress_callback(callbacks, "image"),
+                    progress_callback=_image_progress_callback(callbacks, request.meta),
                 )
             else:
                 toc_path = img_dir / f"{stem}.toc"
@@ -197,7 +198,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
                     command_template=cfg.cdrdao_command,
                     debug=enc.debug,
                     process_callback=lambda proc: _set_process(callbacks, proc),
-                    progress_callback=_progress_callback(callbacks, "image"),
+                    progress_callback=_image_progress_callback(callbacks, request.meta),
                     track_count=disc_info.track_count,
                     track_offsets=disc_info.track_offsets,
                     leadout=disc_info.leadout,
@@ -258,7 +259,7 @@ def run_backup(request: BackupRunRequest, callbacks: BackupCallbacks | None = No
                 disc_info.track_count,
                 cleanup,
                 debug=enc.debug,
-                progress_callback=_audio_progress_callback(callbacks),
+                progress_callback=_audio_progress_callback(callbacks, request.meta, request.selected_tracks),
                 process_callback=lambda proc: _set_process(callbacks, proc),
                 selected_tracks=request.selected_tracks,
                 sample_offset=cfg.cdparanoia_sample_offset,
@@ -738,14 +739,59 @@ def _progress_callback(
     return _callback
 
 
-def _audio_progress_callback(callbacks: BackupCallbacks) -> Callable[[int, int, str], None] | None:
+_IMAGE_TRACK_LABEL_RE = re.compile(r"^Disc image: track (\d+)")
+
+
+def _image_progress_callback(
+    callbacks: BackupCallbacks, meta: Metadata
+) -> Callable[[int, int, str], None] | None:
+    """Progress callback for the disc image stage that appends the track's title.
+
+    The rip tools only report "Disc image: track N/M"; the title is added here,
+    where the metadata is known, so the tools stay metadata-free. Labels that
+    name no track (byte counts) or a track without a title pass through unchanged.
+    """
+    base = _progress_callback(callbacks, "image")
+    if base is None:
+        return None
+
+    def _callback(current: int, total: int, label: str) -> None:
+        m = _IMAGE_TRACK_LABEL_RE.match(label)
+        if m:
+            track = meta.track(int(m.group(1)))
+            title = track.title.strip() if track is not None else ""
+            if title:
+                label = f"{label} \u2013 {title}"
+        base(current, total, label)
+
+    return _callback
+
+
+def _track_label(meta: Metadata, number: int) -> str:
+    """Return "NN – Title" for a track, or "" when the metadata has no title for it."""
+    track = meta.track(number)
+    title = track.title.strip() if track is not None else ""
+    return f"{number:02d} \u2013 {title}" if title else ""
+
+
+def _audio_progress_callback(
+    callbacks: BackupCallbacks,
+    meta: Metadata | None = None,
+    selected_tracks: list[int] | None = None,
+) -> Callable[[int, int, str], None] | None:
     if callbacks.stage_progress is None:
         return None
 
     def _callback(current: int, total: int, fname: str = "") -> None:
         label = f"Ripping audio tracks ({current}/{total})"
-        if fname:
-            label = f"{label}: {fname}"
+        # The callback reports the n-th selected track, not the disc track number,
+        # so the title is found through the selection. Falls back to the file name
+        # when the metadata has no title for that track.
+        named = ""
+        if meta is not None and selected_tracks and 1 <= current <= len(selected_tracks):
+            named = _track_label(meta, selected_tracks[current - 1])
+        if named or fname:
+            label = f"{label}: {named or fname}"
         # Report tracks *completed* (current - 1) so the bar only reaches 100%
         # when stage_done fires, not while the last track is still being ripped.
         callbacks.stage_progress("rip", current - 1, max(total, 1), label)
