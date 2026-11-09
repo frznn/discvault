@@ -46,7 +46,9 @@ tui = []
 # Exact MusicBrainz disc IDs via libdiscid (needs the system library:
 # `apt install libdiscid0`). Without it DiscVault falls back to cd-discid.
 discid = ["discid>=1.2"]
-all = ["discid>=1.2"]
+# In-terminal cover-art viewer (Kitty/Sixel graphics where supported).
+images = ["textual-image>=0.8", "Pillow>=10.0"]
+all = ["discid>=1.2", "textual-image>=0.8", "Pillow>=10.0"]
 
 [project.scripts]
 discvault = "discvault.cli:main"

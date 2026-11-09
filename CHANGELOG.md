@@ -9,6 +9,7 @@ The project history starts at `v0.1`.
 ### Added
 
 - The TUI now checks, at startup and again before a rip, that the tools the selected outputs need are installed. Missing tools are logged with the feature they block and the install command, and a rip does not start until they are present, instead of failing partway through.
+- The TUI **View** button now shows cover art inside the terminal (Kitty/Sixel graphics where supported, half-block characters elsewhere), without an external program. It needs the optional `images` extra (`pip install 'discvault[images]'`); without it **View** opens the system opener as before.
 - Optional `discid` extra (`pip install 'discvault[discid]'`) for exact MusicBrainz disc IDs through libdiscid.
 
 ### Fixed

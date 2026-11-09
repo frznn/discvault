@@ -165,6 +165,8 @@ Cover art is downloaded automatically when:
 
 The image is saved as `cover.jpg` (or `.png`) in the album folder.
 
+In the TUI, **View** shows the candidate's cover inside a viewer (`Esc`/`q` closes, `o` opens it in the system viewer). The in-terminal viewer needs the `images` extra (`pip install 'discvault[images]'`); without it **View** opens the cover URL with the system opener.
+
 Disable with `--no-cover-art` or `download_cover_art = false` in config.
 
 ## AccurateRip

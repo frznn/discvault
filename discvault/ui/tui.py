@@ -48,6 +48,8 @@ from ..tracks import (
     resolve_selected_tracks,
 )
 from .confirm import ConfirmScreen, _copy_to_clipboard
+from .cover_render import viewer_available
+from .cover_viewer import OPEN_EXTERNALLY, CoverViewerScreen
 from .extras_select import ExtrasSelectScreen
 from .folder_picker import FolderPickerScreen
 from .import_prompt import MetadataImportPromptScreen, TextPromptScreen
@@ -1844,7 +1846,11 @@ class DiscvaultApp(App[None]):
         view_btn.styles.display = "block" if view_eligible else "none"
 
     def _do_cover_art_view(self) -> None:
-        """Open the current candidate's cover-art URL in the system browser."""
+        """Show the current candidate's cover art in the in-TUI viewer.
+
+        Falls back to the system opener when no image renderer is installed
+        (neither ``textual-image`` nor Pillow, i.e. no ``images`` extra).
+        """
         from .. import artwork as artwork_mod
 
         meta = self._current_meta()
@@ -1854,6 +1860,26 @@ class DiscvaultApp(App[None]):
         if not url:
             self._announce("No cover-art URL to view.", severity="warning")
             return
+        if not viewer_available():
+            self._open_cover_url_externally(url)
+            return
+
+        def fetch() -> bytes | None:
+            fetched = artwork_mod.fetch_cover_art(meta)
+            return fetched.content if fetched else None
+
+        artist = (meta.album_artist or "").strip()
+        album = (meta.album or "").strip()
+        title = " — ".join(part for part in (artist, album) if part) or "Cover art"
+
+        def on_close(result: str | None) -> None:
+            if result == OPEN_EXTERNALLY:
+                self._open_cover_url_externally(url)
+
+        self.push_screen(CoverViewerScreen(title=title, fetch=fetch), on_close)
+
+    def _open_cover_url_externally(self, url: str) -> None:
+        """Open a cover-art URL with the system opener."""
         opener = shutil.which("xdg-open") or shutil.which("gio") or shutil.which("open")
         if not opener:
             self._announce("No URL opener (xdg-open) available.", severity="warning")
