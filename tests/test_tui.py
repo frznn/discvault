@@ -29,6 +29,29 @@ from discvault.ui.tui import _target_label_text
 from discvault.ui.tui import DiscvaultApp
 
 
+class StatusLogSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_selection_returns_the_selected_log_text(self) -> None:
+        from textual.app import App
+        from textual.geometry import Offset
+        from textual.selection import Selection
+
+        class _App(App[None]):
+            def compose(self):
+                yield StatusRichLog(id="log", markup=True)
+
+        async with _App().run_test() as pilot:
+            log = pilot.app.query_one("#log", StatusRichLog)
+            log.write("[bold]first[/bold] line")
+            log.write("second line")
+            await pilot.pause()
+            result = log.get_selection(Selection(Offset(0, 0), Offset(5, 1)))
+            self.assertEqual(result, ("first line\nsecon", "\n"))
+            # Rendering with an active selection must not raise.
+            log.screen.selections = {log: Selection(Offset(0, 0), Offset(5, 1))}
+            log.selection_updated(log.text_selection)
+            await pilot.pause()
+
+
 class TuiHelpersTests(unittest.TestCase):
     def test_status_log_scrolls_one_line_per_pointer_step(self) -> None:
         log = StatusRichLog()

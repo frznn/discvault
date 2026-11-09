@@ -65,7 +65,50 @@ from .source_select import SourceSelectScreen
 
 
 class StatusRichLog(RichLog):
-    """RichLog with one-line mouse-wheel scrolling."""
+    """RichLog with one-line mouse-wheel scrolling and mouse text selection.
+
+    Textual's RichLog stores pre-rendered strips and so has no selection
+    support of its own. Selection is built from those same strips, so the
+    selected text always matches the rows on screen (wrapping and the
+    max_lines cap included), unlike the separate app-level history list.
+    """
+
+    def get_selection(self, selection) -> tuple[str, str] | None:
+        text = "\n".join(strip.text for strip in self.lines)
+        return selection.extract(text), "\n"
+
+    def selection_updated(self, selection) -> None:
+        # The strip cache is keyed on position only, so it must be dropped for
+        # the highlight to appear and disappear.
+        self._line_cache.clear()
+        self.refresh()
+
+    def _render_line(self, y: int, scroll_x: int, width: int):
+        strip = super()._render_line(y, scroll_x, width)
+        selection = self.text_selection
+        if selection is None or y >= len(self.lines):
+            return strip
+        span = selection.get_span(y)
+        if span is None:
+            return strip
+        start, end = span
+        line = self.lines[y]
+        if end == -1:
+            end = line.cell_length
+        if end <= start:
+            return strip
+        # Restyle the selected cell range of the uncropped line, then crop the
+        # same way the base class does.
+        style = self.screen.get_component_rich_style("screen--selection")
+        parts = []
+        if start > 0:
+            parts.append(line.crop(0, start))
+        parts.append(line.crop(start, end).apply_style(style))
+        if end < line.cell_length:
+            parts.append(line.crop(end, line.cell_length))
+        from textual.strip import Strip
+
+        return Strip.join(parts).crop_extend(scroll_x, scroll_x + width, self.rich_style)
 
     def _scroll_down_for_pointer(
         self,
