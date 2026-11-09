@@ -880,17 +880,20 @@ class DiscvaultApp(App[None]):
             **self._track_hint_kwargs(),
         )
 
+    def _disc_geometry_known(self) -> bool:
+        """False when no TOC tool reported a track count for the disc."""
+        return self._disc_info is not None and self._disc_info.track_count > 0
+
     def _effective_audio_tracks(self, meta: Metadata | None = None) -> list[int]:
-        if self._disc_info is None:
+        if not self._disc_geometry_known():
+            # Without a track count the disc cannot say which tracks are audio;
+            # the tracklist shown comes from metadata, so that is the only set
+            # that can be offered. Treating it as empty would leave every
+            # displayed track unselectable.
+            meta = meta or self._current_meta()
             if meta is None:
                 return []
-            return sorted(
-                {
-                    track.number
-                    for track in meta.tracks
-                    if track.number > 0
-                }
-            )
+            return sorted({track.number for track in meta.tracks if track.number > 0})
         return effective_audio_track_numbers(
             self._disc_info,
             meta or self._current_meta(),
@@ -926,40 +929,50 @@ class DiscvaultApp(App[None]):
             },
         )
 
-    def _sync_track_selection(self) -> None:
-        if self._disc_info is None:
-            self._selected_tracks = {}
-            return
-
-        audio_tracks = set(self._effective_audio_tracks())
+    def _default_selected_tracks(self) -> set[int]:
+        """Tracks selected by default for the current disc/metadata view."""
+        if not self._disc_geometry_known():
+            audio = set(self._effective_audio_tracks())
+            if self._requested_tracks is None:
+                return audio
+            return audio & set(self._requested_tracks)
         if self._requested_tracks is None:
-            defaults = set(audio_tracks)
-        else:
-            defaults = set(
-                resolve_selected_tracks(
-                    self._disc_info,
-                    self._requested_tracks,
-                    self._current_meta(),
-                    **self._track_hint_kwargs(),
-                )
+            return set(self._effective_audio_tracks())
+        return set(
+            resolve_selected_tracks(
+                self._disc_info,
+                self._requested_tracks,
+                self._current_meta(),
+                **self._track_hint_kwargs(),
             )
+        )
+
+    def _sync_track_selection(self) -> None:
+        # ``_selected_tracks`` holds only explicit user choices. Derived
+        # defaults are recomputed on every read: persisting them would freeze a
+        # track as "off" if it was momentarily non-audio (e.g. before metadata
+        # or the data-session hint arrived), leaving the checkbox shown ticked
+        # while the selection is empty.
+        if not self._disc_geometry_known():
+            return
         self._selected_tracks = {
-            track_number: self._selected_tracks.get(track_number, track_number in defaults)
-            for track_number in range(1, self._disc_info.track_count + 1)
+            number: enabled
+            for number, enabled in self._selected_tracks.items()
+            if 1 <= number <= self._disc_info.track_count
         }
-        for track_number in list(self._selected_tracks):
-            if track_number not in audio_tracks:
-                self._selected_tracks[track_number] = False
+
+    def _track_selected(self, track_number: int) -> bool:
+        """Effective selection: audio tracks only, explicit choice over default."""
+        if track_number not in self._effective_audio_tracks():
+            return False
+        return self._selected_tracks.get(track_number, track_number in self._default_selected_tracks())
 
     def _selected_audio_tracks(self) -> list[int]:
-        if self._disc_info is None:
-            return sorted(track for track, enabled in self._selected_tracks.items() if enabled)
         self._sync_track_selection()
-        audio_tracks = set(self._effective_audio_tracks())
         return [
             track_number
-            for track_number in range(1, self._disc_info.track_count + 1)
-            if self._selected_tracks.get(track_number, False) and track_number in audio_tracks
+            for track_number in self._effective_audio_tracks()
+            if self._track_selected(track_number)
         ]
 
     def _set_tracklist_message(self, message: str) -> None:
@@ -1050,7 +1063,7 @@ class DiscvaultApp(App[None]):
                 Horizontal(
                     Checkbox(
                         "",
-                        value=self._selected_tracks.get(track.number, True),
+                        value=self._track_selected(track.number),
                         id=f"track-enabled-{track.number}",
                         classes="track-enable",
                         compact=True,
