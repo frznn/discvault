@@ -1,6 +1,7 @@
 """Full Textual TUI for discvault."""
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import replace
 import shutil
 import subprocess
@@ -417,12 +418,19 @@ def _needs_overwrite_confirmation(album_root: Path, outputs: dict[str, bool] | N
     return any(_dir_has_files(d) for d in dirs)
 
 
-def _has_partial_rip_state(album_root: Path, work_dir: Path) -> bool:
+def _has_partial_rip_state(
+    album_root: Path, work_dir: Path, wav_names: Collection[str] | None = None
+) -> bool:
     """True when ``album_root`` (or ``work_dir``) already has rip artifacts.
 
     Used to enable the TUI ``Resume`` button so the user can re-run with
     skip-when-present without overwriting a partly-completed run.
     Empty files are ignored — they're typically the leftovers of a failed write.
+
+    ``work_dir`` is shared by every disc, so a stray WAV there says nothing about
+    the current rip. When ``wav_names`` is given, only WAVs with those names (the
+    ones the pipeline would reuse for this disc's selected tracks) count; ``None``
+    counts any ``*.cdda.wav``.
     """
     from .. import library
     if not album_root.exists() and not work_dir.exists():
@@ -452,6 +460,8 @@ def _has_partial_rip_state(album_root: Path, work_dir: Path) -> bool:
     if work_dir.is_dir():
         for entry in work_dir.iterdir():
             name = entry.name
+            if wav_names is not None and name not in wav_names:
+                continue
             if entry.is_file() and name.endswith(".cdda.wav") and entry.stat().st_size > 0:
                 return True
     return False
@@ -1220,11 +1230,20 @@ class DiscvaultApp(App[None]):
         if self.phase == "ready" and not self._operation_busy:
             album_root = self._prospective_album_root()
             if album_root is not None and _has_partial_rip_state(
-                album_root, Path(self._cfg.work_dir)
+                album_root, Path(self._cfg.work_dir), self._reusable_wav_names()
             ):
                 resume_mode = True
         self._start_button_in_resume_mode = resume_mode
         btn.label = "Resume" if resume_mode else "Start"
+
+    def _reusable_wav_names(self) -> set[str]:
+        """Work-dir WAV names the pipeline would reuse for this disc's selected tracks."""
+        from ..rip import _wav_name_for_track
+
+        if self._disc_info is None:
+            return set()
+        total = self._disc_info.track_count
+        return {_wav_name_for_track(n, total) for n in self._selected_audio_tracks()}
 
     def _prospective_album_root(self) -> Path | None:
         from .. import library

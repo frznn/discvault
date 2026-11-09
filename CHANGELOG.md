@@ -13,6 +13,7 @@ The project history starts at `v0.1`.
 
 ### Fixed
 
+- The TUI no longer shows `Resume` instead of `Start` because of a stray WAV in the work directory left by an earlier rip; only WAVs for the current disc's selected tracks count.
 - The Debian/Ubuntu install hint and `docs/INSTALL.md` no longer name a `discid` apt package, which does not exist; they list `cd-discid`.
 
 ## [0.4] - 2026-04-30

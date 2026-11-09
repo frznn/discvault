@@ -1223,6 +1223,24 @@ class HasPartialRipStateTests(unittest.TestCase):
             (work / "track01.cdda.wav").write_bytes(b"x")
             self.assertTrue(_has_partial_rip_state(album, work))
 
+    def test_work_dir_wav_for_other_track_does_not_count(self) -> None:
+        # A stray WAV (e.g. ``track00`` from an aborted rip of another disc) must
+        # not flip Start to Resume when it is not one this rip would reuse.
+        with TemporaryDirectory() as tmp:
+            album = Path(tmp) / "missing"
+            work = Path(tmp) / "work"
+            work.mkdir()
+            (work / "track00.cdda.wav").write_bytes(b"x")
+            self.assertFalse(_has_partial_rip_state(album, work, {"track01.cdda.wav"}))
+
+    def test_work_dir_wav_for_selected_track_counts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            album = Path(tmp) / "missing"
+            work = Path(tmp) / "work"
+            work.mkdir()
+            (work / "track01.cdda.wav").write_bytes(b"x")
+            self.assertTrue(_has_partial_rip_state(album, work, {"track01.cdda.wav"}))
+
     def test_false_when_work_dir_only_has_unrelated_files(self) -> None:
         with TemporaryDirectory() as tmp:
             album = Path(tmp) / "album"
