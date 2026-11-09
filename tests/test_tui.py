@@ -22,6 +22,7 @@ from discvault.ui.tui import _extras_notice_text
 from discvault.ui.tui import _has_partial_rip_state
 from discvault.ui.tui import _needs_overwrite_confirmation
 from discvault.ui.tui import _output_stage_label
+from discvault.ui.tui import _rip_header_text
 from discvault.ui.tui import MetadataDataTable
 from discvault.ui.tui import StatusRichLog
 from discvault.ui.tui import _target_button_destination
@@ -253,6 +254,20 @@ class TuiHelpersTests(unittest.TestCase):
     def test_output_stage_label_uses_copy_wording_for_wav(self) -> None:
         self.assertEqual(_output_stage_label("wav", "WAV"), "Saving tracks to WAV format")
         self.assertEqual(_output_stage_label("flac", "FLAC"), "Encoding tracks to FLAC format")
+
+    def test_rip_header_text_shows_disc_data_and_target(self) -> None:
+        text = _rip_header_text("Pink Floyd", "The Wall", "1979", 26, Path("/lib/Pink Floyd/The Wall"))
+        self.assertIn("Pink Floyd", text)
+        self.assertIn("The Wall (1979)", text)
+        self.assertIn("26 tracks", text)
+        self.assertIn("Target: /lib/Pink Floyd/The Wall", text)
+
+    def test_rip_header_text_omits_unknowns_and_escapes_markup(self) -> None:
+        text = _rip_header_text("[x]", "", "", 0, None)
+        self.assertIn("\\[x]", text)
+        self.assertNotIn("Target", text)
+        self.assertNotIn("tracks", text)
+        self.assertNotIn("()", text)
 
     def test_extras_button_label_prefers_available_count(self) -> None:
         self.assertEqual(_extras_button_label(0, 2), "Extras (2)")

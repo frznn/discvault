@@ -279,6 +279,23 @@ def _target_label_text(base_dir: str, artist: str, album: str, year: str) -> str
     return f"Target Dir: {target}"
 
 
+def _rip_header_text(
+    artist: str, album: str, year: str, track_count: int, target: Path | None
+) -> str:
+    """Disc summary shown above the progress bars while ripping (Rich markup, values escaped)."""
+    from rich.markup import escape
+
+    title = f"[bold]{escape(artist or '?')}[/bold] \u2014 {escape(album or '?')}"
+    if year:
+        title += f" ({escape(year)})"
+    lines = [title]
+    if track_count:
+        lines.append(f"[dim]{track_count} tracks[/dim]")
+    if target is not None:
+        lines.append(f"[dim]Target: {escape(str(target))}[/dim]")
+    return "\n".join(lines)
+
+
 def _extras_button_label(selected_count: int, available_count: int) -> str:
     if available_count > 0:
         if selected_count > 0:
@@ -650,6 +667,7 @@ class DiscvaultApp(App[None]):
 
                 # Running phase: progress bars
                 with Vertical(id="progress-section"):
+                    yield Static("", id="rip-header", markup=True)
                     with Vertical(id="prog-image-row", classes="prog-row"):
                         with Horizontal(classes="prog-lbl-row"):
                             yield Label("", id="prog-image-lbl", classes="prog-lbl")
@@ -2845,6 +2863,15 @@ class DiscvaultApp(App[None]):
             self._hide(section)
         self._hide("metadata-box")
         self._pb_reset()
+        self.query_one("#rip-header", Static).update(
+            _rip_header_text(
+                artist,
+                album,
+                year,
+                len(selected_tracks),
+                self._target_album_root(),
+            )
+        )
         self._show("progress-section")
 
         self.query_one("#btn-cancel", Button).label = "Cancel"
