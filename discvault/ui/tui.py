@@ -3478,6 +3478,12 @@ class DiscvaultApp(App[None]):
             # Input widget: copy entire value if no selection API
             text = focused.value
 
+        if not text:
+            # Mouse selection in a non-input widget such as the status log.
+            # Goes through the system clipboard helper because Textual's own
+            # copy relies on terminal OSC 52 support.
+            text = self.screen.get_selected_text() or ""
+
         if text:
             if _copy_to_clipboard(text):
                 self._announce("Copied to clipboard", severity="success")
