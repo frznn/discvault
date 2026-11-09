@@ -43,7 +43,10 @@ Changelog = "https://github.com/frznn/discvault/blob/master/CHANGELOG.md"
 
 [project.optional-dependencies]
 tui = []
-all = []
+# Exact MusicBrainz disc IDs via libdiscid (needs the system library:
+# `apt install libdiscid0`). Without it DiscVault falls back to cd-discid.
+discid = ["discid>=1.2"]
+all = ["discid>=1.2"]
 
 [project.scripts]
 discvault = "discvault.cli:main"

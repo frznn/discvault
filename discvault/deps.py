@@ -100,7 +100,7 @@ _DEPENDENCY_SPECS = {
         commands=("discid", "cd-discid"),
         mode="any",
         package_hints={
-            "apt": ("discid", "cd-discid"),
+            "apt": ("cd-discid",),
             "pacman": ("libdiscid",),
             "dnf": ("libdiscid", "cd-discid"),
         },

@@ -9,6 +9,11 @@ The project history starts at `v0.1`.
 ### Added
 
 - The TUI now checks, at startup and again before a rip, that the tools the selected outputs need are installed. Missing tools are logged with the feature they block and the install command, and a rip does not start until they are present, instead of failing partway through.
+- Optional `discid` extra (`pip install 'discvault[discid]'`) for exact MusicBrainz disc IDs through libdiscid.
+
+### Fixed
+
+- The Debian/Ubuntu install hint and `docs/INSTALL.md` no longer name a `discid` apt package, which does not exist; they list `cd-discid`.
 
 ## [0.4] - 2026-04-30
 

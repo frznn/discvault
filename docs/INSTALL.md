@@ -80,8 +80,16 @@ Enable output formats by installing the corresponding encoder:
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install cdrdao wodim cdparanoia discid cd-discid libcdio-utils \
+sudo apt install cdrdao wodim cdparanoia cd-discid libcdio-utils \
   flac lame vorbis-tools opus-tools ffmpeg eject libnotify-bin
+```
+
+For exact MusicBrainz disc IDs (otherwise DiscVault falls back to the TOC from `cd-discid`), install the libdiscid Python binding. For a pipx or virtualenv install, add the extra and the system library; for a system-wide Python, the distro package is enough:
+
+```bash
+sudo apt install libdiscid0
+pipx install 'discvault[discid]'      # or: pip install 'discvault[discid]'
+# system Python instead: sudo apt install python3-libdiscid
 ```
 
 ### Arch Linux
