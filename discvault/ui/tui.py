@@ -3035,14 +3035,19 @@ class DiscvaultApp(App[None]):
             )
             return
 
+        # The opener is detached with its output sent to /dev/null: a file
+        # manager launched by xdg-open inherits any pipe we hand it and keeps
+        # it open for its whole lifetime, so capturing output would make us
+        # wait on a folder that is already open.
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
-                text=True,
-                timeout=15,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
-        except FileNotFoundError:
+        except OSError:
             self.call_from_thread(
                 self._finish_open_target,
                 False,
@@ -3050,17 +3055,21 @@ class DiscvaultApp(App[None]):
                 f"Failed to execute {cmd[0]}.",
             )
             return
+
+        try:
+            returncode = proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            self.call_from_thread(
-                self._finish_open_target,
-                False,
-                path,
-                "Timed out waiting for the folder opener.",
-            )
+            # Still running means the file manager took over the process; the
+            # folder was handed off, so this is success, not failure.
+            self.call_from_thread(self._finish_open_target, True, path, "")
             return
 
-        detail = (result.stderr or result.stdout or "").strip()
-        self.call_from_thread(self._finish_open_target, result.returncode == 0, path, detail)
+        self.call_from_thread(
+            self._finish_open_target,
+            returncode == 0,
+            path,
+            "" if returncode == 0 else f"{cmd[0]} exited with status {returncode}.",
+        )
 
     def _finish_open_target(self, ok: bool, path: Path, detail: str = "") -> None:
         self._target_open_busy = False
