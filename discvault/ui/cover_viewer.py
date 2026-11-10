@@ -41,8 +41,8 @@ class CoverViewerScreen(ModalScreen[str | None]):
     }
 
     #cover-dialog {
-        width: 100%;
-        height: 100%;
+        width: auto;
+        height: auto;
         border: round $surface;
         background: $panel;
         padding: 0 1;
@@ -54,7 +54,9 @@ class CoverViewerScreen(ModalScreen[str | None]):
     }
 
     #cover-body {
-        height: 1fr;
+        /* Sized in cells by _apply_box so the picture area is square. */
+        width: 40;
+        height: 20;
         content-align: center middle;
         text-align: center;
     }
@@ -84,11 +86,36 @@ class CoverViewerScreen(ModalScreen[str | None]):
     def _hint() -> str:
         keys = "Esc/q close · o open in external viewer"
         if low_resolution_renderer():
-            return f"Low resolution: this terminal has no image protocol, so the image is drawn from text cells. {keys} for full quality"
+            return f"Low resolution: no image protocol in this terminal. o opens the full-quality external viewer · Esc/q close"
         return keys
 
+    # Cells are about twice as tall as wide, so a square picture is twice
+    # as many columns as rows. The dialog chrome around it: a 2-row border,
+    # a title row and up to three hint rows; a 2-column border and padding.
+    _CHROME_ROWS = 6
+    _CHROME_COLS = 4
+
     def on_mount(self) -> None:
+        self._apply_box()
         self._load()
+
+    def on_resize(self) -> None:
+        self._apply_box()
+        if self._data is not None and not self.query("#cover-image"):
+            self._show_halfblocks(self.query_one("#cover-body", Static), self._data)
+
+    def _apply_box(self) -> None:
+        """Size the picture area to the largest square that fits the screen."""
+        rows = min(
+            self.size.height - self._CHROME_ROWS,
+            (self.size.width - self._CHROME_COLS) // 2,
+        )
+        rows = max(4, rows)
+        # An explicit dialog width keeps the long hint line wrapping inside it.
+        self.query_one("#cover-dialog").styles.width = rows * 2 + self._CHROME_COLS
+        for widget in (self.query_one("#cover-body"), *self.query("#cover-image")):
+            widget.styles.width = rows * 2
+            widget.styles.height = rows
 
     @work(thread=True, name="cover-view-fetch", exclusive=True)
     def _load(self) -> None:
@@ -115,20 +142,21 @@ class CoverViewerScreen(ModalScreen[str | None]):
             from .cover_render import _textual_image_widget
 
             widget = _textual_image_widget.Image(PILImage.open(io.BytesIO(data)), id="cover-image")
-            widget.styles.width = "100%"
-            widget.styles.height = "1fr"
             # Hide rather than remove the placeholder: removal is asynchronous,
             # and the new widget must not share its id while both exist.
             self.query_one("#cover-body").display = False
             self.query_one("#cover-dialog").mount(widget, before="#cover-hint")
+            self._apply_box()
             return True
         except Exception:
             return False
 
     def _show_halfblocks(self, body: Static, data: bytes) -> None:
-        size = body.size
+        # Read the box from its styles: after a resize the laid-out size lags.
+        cols = int(body.styles.width.value) if body.styles.width else body.size.width
+        rows = int(body.styles.height.value) if body.styles.height else body.size.height
         try:
-            body.update(halfblock_text(data, size.width, size.height))
+            body.update(halfblock_text(data, cols, rows))
         except (ValueError, RuntimeError) as exc:
             body.update(f"Cannot display this image: {exc}")
 

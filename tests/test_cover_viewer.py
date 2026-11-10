@@ -55,6 +55,20 @@ class CoverViewerScreenTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(app.screen.query("#cover-image")), 1)
             self.assertFalse(app.screen.query_one("#cover-body").display)
 
+    async def test_picture_box_is_square_and_fits_the_screen(self) -> None:
+        data = _png()
+        for size in ((200, 60), (80, 40), (100, 24)):
+            app = _Host(lambda: data)
+            with patch.object(cover_viewer, "textual_image_available", lambda: False):
+                async with app.run_test(size=size) as pilot:
+                    await pilot.pause(0.5)
+                    body = app.screen.query_one("#cover-body")
+                    dialog = app.screen.query_one("#cover-dialog")
+                    # Cells are twice as tall as wide, so square = 2x columns.
+                    self.assertEqual(body.size.width, 2 * body.size.height, size)
+                    self.assertLessEqual(dialog.size.height, size[1], size)
+                    self.assertLessEqual(dialog.size.width, size[0], size)
+
     async def test_low_resolution_renderer_shows_warning(self) -> None:
         app = _Host(lambda: None)
         with patch.object(cover_viewer, "low_resolution_renderer", lambda: True):
