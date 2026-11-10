@@ -66,6 +66,7 @@ class CoverViewerScreenTests(unittest.IsolatedAsyncioTestCase):
                     dialog = app.screen.query_one("#cover-dialog")
                     # Cells are twice as tall as wide, so square = 2x columns.
                     self.assertEqual(body.size.width, 2 * body.size.height, size)
+                    self.assertLessEqual(body.size.height, CoverViewerScreen._MAX_ROWS, size)
                     self.assertLessEqual(dialog.size.height, size[1], size)
                     self.assertLessEqual(dialog.size.width, size[0], size)
 

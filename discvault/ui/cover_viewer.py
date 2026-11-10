@@ -93,6 +93,9 @@ class CoverViewerScreen(ModalScreen[str | None]):
     # as many columns as rows. The dialog chrome around it: a 2-row border,
     # a title row and up to three hint rows; a 2-column border and padding.
     _CHROME_ROWS = 6
+    # Upper bound on the picture's height in rows (so 2x that in columns):
+    # a preview, not a full-screen view. The external viewer is for detail.
+    _MAX_ROWS = 16
     _CHROME_COLS = 4
 
     def on_mount(self) -> None:
@@ -107,6 +110,7 @@ class CoverViewerScreen(ModalScreen[str | None]):
     def _apply_box(self) -> None:
         """Size the picture area to the largest square that fits the screen."""
         rows = min(
+            self._MAX_ROWS,
             self.size.height - self._CHROME_ROWS,
             (self.size.width - self._CHROME_COLS) // 2,
         )
