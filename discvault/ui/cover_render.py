@@ -21,13 +21,19 @@ def pillow_available() -> bool:
     return True
 
 
+# ``textual-image`` probes the terminal (cell size, graphics support) when it
+# is first imported, which must happen before the Textual app takes over the
+# terminal; imported lazily from inside a running app it blocks on the reply.
+# So it is imported here, once, when the TUI module loads.
+try:
+    import textual_image.widget as _textual_image_widget  # noqa: F401
+except Exception:  # missing extra, or a probe that fails: no graphics renderer
+    _textual_image_widget = None
+
+
 def textual_image_available() -> bool:
-    """Return True when the ``textual-image`` widget (and Pillow) can be imported."""
-    try:
-        import textual_image.widget  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    """Return True when the ``textual-image`` widget (and Pillow) were imported."""
+    return _textual_image_widget is not None
 
 
 def viewer_available() -> bool:

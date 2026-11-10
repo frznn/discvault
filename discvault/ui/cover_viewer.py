@@ -105,13 +105,14 @@ class CoverViewerScreen(ModalScreen[str | None]):
         """Swap the placeholder for a textual-image widget; False if it fails."""
         try:
             from PIL import Image as PILImage
-            from textual_image.widget import Image
+            from .cover_render import _textual_image_widget
 
-            widget = Image(PILImage.open(io.BytesIO(data)), id="cover-body")
+            widget = _textual_image_widget.Image(PILImage.open(io.BytesIO(data)), id="cover-image")
             widget.styles.width = "100%"
             widget.styles.height = "1fr"
-            old = self.query_one("#cover-body")
-            old.remove()
+            # Hide rather than remove the placeholder: removal is asynchronous,
+            # and the new widget must not share its id while both exist.
+            self.query_one("#cover-body").display = False
             self.query_one("#cover-dialog").mount(widget, before="#cover-hint")
             return True
         except Exception:
