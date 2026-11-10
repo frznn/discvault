@@ -15,9 +15,28 @@ The project history starts at `v0.1`.
 - The audio rip stage now names the track being ripped by its number and title (for example `05 – Title`) instead of the raw file name, and the disc image stage appends the title to its `track N/M` label, when the metadata has a title for it.
 - The TUI rip view now opens with the disc's data: artist, album, year, track count and the target directory.
 - Optional `discid` extra (`pip install 'discvault[discid]'`) for exact MusicBrainz disc IDs through libdiscid.
+- `--resume` CLI flag: skips stages whose output is already present (disc image, ripped WAVs, encoded files, cover art, extras), so an interrupted rip continues where it stopped. In the TUI, **Start** becomes **Resume** when reusable partial work is detected for the selected tracks.
+- Per-drive rip profiles: `sample_offset`, `image_ripper` and `cdrdao_command` can be overridden per device under `[drives."<device>"]` in the config file, edited from the Settings popup, and applied automatically for the drive in use (the active overrides are logged).
+- The input CD device is persisted as `device` in the config file and editable in Settings; `--device` still wins, and auto-detection is used when it is empty.
+- Candidates now carry the first-release year from MusicBrainz release groups and Discogs masters. The candidate list shows it in a separate `Release year` column next to the pressing `Year`, and it fills the Year field by default (GnuDB's `DYEAR` is treated as first-release year too). The new `prefer_release_year` option (a Settings toggle) uses the pressing year instead.
+- Equivalent metadata candidates from different providers are collapsed into one entry, controlled by the new `dedupe_equivalent_candidates` option (default on, a Settings toggle).
+- The cover-art row in the TUI has an on-demand **Search…** button, shown when no cover art is available, that runs a MusicBrainz search from the Artist/Album fields (so a typo in the title can be fixed in place) and attaches the result to the current candidate, with a log line reporting the hits and a typo hint when nothing is found. **View** is shown when cover art is available.
+- The status log's text can be selected with the mouse, and the copy key copies that selection to the system clipboard.
+
+### Changed
+
+- The cover-art checkbox is now labelled `Cover Art` (`Cover art` in Settings) and sits on its own row above the Destination row.
+- TUI button layout: **Open** moved to the Destination row, **Copy log** next to the status log, **Outputs** (formerly `Select Outputs`) and **Extras** to the right-hand action group, and **Open Library** stays on the left.
+
+### Removed
+
+- GnuDB CDDBP support. GnuDB lookups use HTTP only, and the `[gnudb] host` and `port` config keys are ignored.
 
 ### Fixed
 
+- Track selection in the TUI keeps only explicit choices: a track that was briefly non-audio no longer stays deselected while its checkbox shows ticked, and when the disc reports no track count the metadata's tracks are used instead of failing with `Select at least one audio track`.
+- Opening the library folder no longer reports a false timeout while the file manager is already open.
+- The redundant track-artist blanking now applies to every metadata lookup path, not only some of them.
 - The TUI no longer shows `Resume` instead of `Start` because of a stray WAV in the work directory left by an earlier rip; only WAVs for the current disc's selected tracks count.
 - The Debian/Ubuntu install hint and `docs/INSTALL.md` no longer name a `discid` apt package, which does not exist; they list `cd-discid`.
 
