@@ -6,6 +6,8 @@ The project history starts at `v0.1`.
 
 ## [Unreleased]
 
+## [0.5] - 2026-11-10
+
 ### Added
 
 - The TUI **View** button now downloads the cover and opens it in the system image viewer instead of opening its URL in the browser (the URL is still used if the download fails).
