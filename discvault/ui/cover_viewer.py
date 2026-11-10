@@ -41,8 +41,8 @@ class CoverViewerScreen(ModalScreen[str | None]):
     }
 
     #cover-dialog {
-        width: 90%;
-        height: 90%;
+        width: 100%;
+        height: 100%;
         border: round $surface;
         background: $panel;
         padding: 0 1;
