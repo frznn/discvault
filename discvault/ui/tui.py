@@ -516,6 +516,12 @@ def _output_option_label(key: str, args, cfg: "Config") -> str:
         return "WAV copy"
     return key
 
+def _terminal_title(artist: str, album: str) -> str:
+    """Terminal window/tab title: "DiscVault", plus "artist - album" once either is known."""
+    label = " - ".join(part for part in (artist.strip(), album.strip()) if part)
+    return f"DiscVault \u2014 {label}" if label else "DiscVault"
+
+
 class DiscvaultApp(App[None]):
     """Full discvault TUI."""
 
@@ -750,8 +756,18 @@ class DiscvaultApp(App[None]):
 
         yield Footer(show_command_palette=False)
 
+    def _set_terminal_title(self) -> None:
+        """Write the terminal title (OSC 2). Textual does not set it; the driver may be absent."""
+        title = _terminal_title(self._input_val("input-artist"), self._input_val("input-album"))
+        # Strip control characters so metadata can never inject escape sequences.
+        title = "".join(ch for ch in title if ch.isprintable())
+        driver = getattr(self, "_driver", None)
+        if driver is not None:
+            driver.write(f"\x1b]2;{title}\x07")
+
     def on_mount(self) -> None:
         self.phase = "detecting"
+        self._set_terminal_title()
         self._log(f"[bold]discvault[/bold] starting up...")
         self._disc_watch_timer = self.set_interval(4.0, self._schedule_disc_watch)
         self._refresh_eject_button()
@@ -2083,6 +2099,7 @@ class DiscvaultApp(App[None]):
             self._manual_meta.album_artist = artist
             self._manual_meta.album = album
             self._manual_meta.year = year
+        self._set_terminal_title()
         self._update_target_input()
         self._update_cover_art_checkbox()
         self._refresh_resume_button()

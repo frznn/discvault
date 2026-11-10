@@ -70,9 +70,18 @@ def _run_tui(args: argparse.Namespace, cfg: Config) -> None:
     # 5 minutes waiting for network/IO threads to finish.
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    # xterm title stack: save the terminal's title (CSI 22;2 t) before the TUI sets its own
+    # and restore it (CSI 23;2 t) on exit; terminals without the stack ignore both.
+    title_stack = sys.__stdout__ is not None and sys.__stdout__.isatty()
+    if title_stack:
+        sys.__stdout__.write("\x1b[22;2t")
+        sys.__stdout__.flush()
     try:
         loop.run_until_complete(app.run_async())
     finally:
+        if title_stack:
+            sys.__stdout__.write("\x1b[23;2t")
+            sys.__stdout__.flush()
         pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
         for task in pending:
             task.cancel()

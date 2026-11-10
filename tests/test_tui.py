@@ -27,7 +27,17 @@ from discvault.ui.tui import MetadataDataTable
 from discvault.ui.tui import StatusRichLog
 from discvault.ui.tui import _target_button_destination
 from discvault.ui.tui import _target_label_text
+from discvault.ui.tui import _terminal_title
 from discvault.ui.tui import DiscvaultApp
+
+
+class TerminalTitleTests(unittest.TestCase):
+    def test_title_names_the_app_until_the_disc_is_known(self) -> None:
+        self.assertEqual(_terminal_title("", " "), "DiscVault")
+
+    def test_title_adds_artist_and_album(self) -> None:
+        self.assertEqual(_terminal_title("Artist", "Album"), "DiscVault \u2014 Artist - Album")
+        self.assertEqual(_terminal_title("", "Album"), "DiscVault \u2014 Album")
 
 
 class StatusLogSelectionTests(unittest.IsolatedAsyncioTestCase):
