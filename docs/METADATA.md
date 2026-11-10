@@ -165,7 +165,7 @@ Cover art is downloaded automatically when:
 
 The image is saved as `cover.jpg` (or `.png`) in the album folder.
 
-In the TUI, **View** shows the candidate's cover inside a viewer (`Esc`/`q` closes, `o` opens it in the system viewer). The in-terminal viewer needs the `images` extra (`pip install 'discvault[images]'`); without it **View** opens the cover URL with the system opener.
+In the TUI, **View** opens the candidate's cover in the system image viewer. **Preview** shows it inside the terminal (`Esc`/`q` closes, `o` opens the system viewer); it needs the `images` extra (`pip install 'discvault[images]'`) and is low resolution in terminals without Kitty or Sixel graphics.
 
 Disable with `--no-cover-art` or `download_cover_art = false` in config.
 

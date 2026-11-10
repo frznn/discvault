@@ -55,6 +55,14 @@ class CoverViewerScreenTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(app.screen.query("#cover-image")), 1)
             self.assertFalse(app.screen.query_one("#cover-body").display)
 
+    async def test_low_resolution_renderer_shows_warning(self) -> None:
+        app = _Host(lambda: None)
+        with patch.object(cover_viewer, "low_resolution_renderer", lambda: True):
+            async with app.run_test(size=(100, 40)) as pilot:
+                await pilot.pause(0.3)
+                hint = app.screen.query_one("#cover-hint")
+                self.assertIn("Low resolution", str(hint.content))
+
     async def test_failed_download_shows_message(self) -> None:
         app = _Host(lambda: None)
         async with app.run_test(size=(100, 40)) as pilot:

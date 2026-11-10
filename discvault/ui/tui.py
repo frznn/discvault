@@ -5,6 +5,7 @@ from collections.abc import Collection
 from dataclasses import replace
 import shutil
 import subprocess
+import tempfile
 import time
 import unicodedata
 from pathlib import Path
@@ -649,6 +650,7 @@ class DiscvaultApp(App[None]):
                     yield Label("", id="cover-art-source", classes="cover-art-source-lbl")
                     yield Button("Search…", id="btn-cover-search", compact=True, disabled=True)
                     yield Button("View", id="btn-cover-view", compact=True, disabled=True)
+                    yield Button("Preview", id="btn-cover-preview", compact=True, disabled=True)
 
                 with Horizontal(id="target-row"):
                     yield Label("Destination", classes="tag-lbl")
@@ -1844,12 +1846,18 @@ class DiscvaultApp(App[None]):
         view_eligible = available and self.phase == "ready"
         view_btn.disabled = not view_eligible
         view_btn.styles.display = "block" if view_eligible else "none"
+        # The in-TUI preview exists only when a renderer is installed.
+        preview_eligible = view_eligible and viewer_available()
+        preview_btn = self.query_one("#btn-cover-preview", Button)
+        preview_btn.disabled = not preview_eligible
+        preview_btn.styles.display = "block" if preview_eligible else "none"
 
     def _do_cover_art_view(self) -> None:
-        """Show the current candidate's cover art in the in-TUI viewer.
+        """Open the current candidate's cover in the system image viewer.
 
-        Falls back to the system opener when no image renderer is installed
-        (neither ``textual-image`` nor Pillow, i.e. no ``images`` extra).
+        The image is downloaded to a temporary file so the desktop's own
+        viewer opens it at full quality; if the download fails the URL is
+        handed to the system opener (browser) instead.
         """
         from .. import artwork as artwork_mod
 
@@ -1860,8 +1868,55 @@ class DiscvaultApp(App[None]):
         if not url:
             self._announce("No cover-art URL to view.", severity="warning")
             return
-        if not viewer_available():
+        self._start_cover_art_external_view(meta, url)
+
+    @work(thread=True, name="cover-art-view")
+    def _start_cover_art_external_view(self, meta: Metadata, url: str) -> None:
+        """Download the cover to a temp file and open it (worker thread)."""
+        from .. import artwork as artwork_mod
+
+        path: Path | None = None
+        try:
+            fetched = artwork_mod.fetch_cover_art(meta)
+            if fetched is not None:
+                ext = (
+                    meta.cover_art_ext
+                    or artwork_mod._ext_from_content_type(fetched.content_type)
+                    or artwork_mod._ext_from_url(fetched.url)
+                )
+                if ext not in {"jpg", "jpeg", "png", "webp"}:
+                    ext = "jpg"
+                directory = Path(tempfile.mkdtemp(prefix="discvault-cover-"))
+                path = directory / f"cover.{ext}"
+                path.write_bytes(fetched.content)
+        except Exception:
+            path = None
+        self.call_from_thread(self._finish_cover_art_external_view, path, url)
+
+    def _finish_cover_art_external_view(self, path: Path | None, url: str) -> None:
+        """Open the downloaded file, or the URL when there is no file."""
+        if path is None:
+            self._announce("Could not download the cover; opening its URL instead.", severity="warning")
             self._open_cover_url_externally(url)
+            return
+        self._open_cover_url_externally(str(path))
+
+    def _do_cover_art_preview(self) -> None:
+        """Show the current candidate's cover art in the in-TUI viewer.
+
+        Resolution is limited by the terminal's character cells (full
+        quality only with a graphics protocol), so the viewer warns about it
+        and offers the system viewer. Does nothing without an installed
+        renderer (neither ``textual-image`` nor Pillow).
+        """
+        from .. import artwork as artwork_mod
+
+        meta = self._current_meta()
+        if meta is None or not viewer_available():
+            return
+        url = artwork_mod.primary_cover_art_url(meta)
+        if not url:
+            self._announce("No cover-art URL to view.", severity="warning")
             return
 
         def fetch() -> bytes | None:
@@ -1874,7 +1929,7 @@ class DiscvaultApp(App[None]):
 
         def on_close(result: str | None) -> None:
             if result == OPEN_EXTERNALLY:
-                self._open_cover_url_externally(url)
+                self._do_cover_art_view()
 
         self.push_screen(CoverViewerScreen(title=title, fetch=fetch), on_close)
 
@@ -2113,6 +2168,8 @@ class DiscvaultApp(App[None]):
             self._do_cover_art_search()
         elif bid == "btn-cover-view":
             self._do_cover_art_view()
+        elif bid == "btn-cover-preview":
+            self._do_cover_art_preview()
         elif bid == "btn-eject":
             self._do_eject()
         elif bid == "btn-start":

@@ -92,7 +92,7 @@ pipx install 'discvault[discid]'      # or: pip install 'discvault[discid]'
 # system Python instead: sudo apt install python3-libdiscid
 ```
 
-To view cover art inside the TUI (the **View** button next to **Search…**), install the `images` extra. It uses Kitty/Sixel graphics where the terminal supports them and falls back to half-block characters elsewhere. Without it, **View** opens the cover with the system opener (`xdg-open`):
+**View** opens the cover in the system image viewer (`xdg-open`). To also preview it inside the TUI (the **Preview** button), install the `images` extra. It uses Kitty/Sixel graphics where the terminal supports them and falls back to low-resolution half-block characters elsewhere:
 
 ```bash
 pipx install 'discvault[images]'      # or: pip install 'discvault[images]'

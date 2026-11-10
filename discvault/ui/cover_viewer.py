@@ -21,7 +21,7 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Label, Static
 
-from .cover_render import halfblock_text, textual_image_available
+from .cover_render import halfblock_text, low_resolution_renderer, textual_image_available
 
 # Result a caller can act on: the user asked for the system viewer instead.
 OPEN_EXTERNALLY = "external"
@@ -60,7 +60,7 @@ class CoverViewerScreen(ModalScreen[str | None]):
     }
 
     #cover-hint {
-        height: 1;
+        height: auto;
         color: $text-muted;
     }
     """
@@ -76,9 +76,16 @@ class CoverViewerScreen(ModalScreen[str | None]):
         yield Vertical(
             Label(self._title, id="cover-title"),
             Static("Loading cover art…", id="cover-body"),
-            Label("Esc/q close · o open in external viewer", id="cover-hint"),
+            Label(self._hint(), id="cover-hint"),
             id="cover-dialog",
         )
+
+    @staticmethod
+    def _hint() -> str:
+        keys = "Esc/q close · o open in external viewer"
+        if low_resolution_renderer():
+            return f"Low resolution: this terminal has no image protocol, so the image is drawn from text cells. {keys} for full quality"
+        return keys
 
     def on_mount(self) -> None:
         self._load()

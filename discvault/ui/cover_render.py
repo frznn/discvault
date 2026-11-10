@@ -36,6 +36,21 @@ def textual_image_available() -> bool:
     return _textual_image_widget is not None
 
 
+def low_resolution_renderer() -> bool:
+    """Return True when the viewer can only draw the image from character cells.
+
+    That is the case for Pillow half-blocks and for ``textual-image`` when the
+    terminal supports neither the Kitty (``tgp``) nor the Sixel protocol.
+    """
+    if _textual_image_widget is None:
+        return True
+    try:
+        from textual_image.renderable import Image as _Renderable
+    except Exception:
+        return True
+    return _Renderable.__module__.rsplit(".", 1)[-1] not in {"tgp", "sixel"}
+
+
 def viewer_available() -> bool:
     """Return True when the TUI can show an image itself (either renderer)."""
     return textual_image_available() or pillow_available()
