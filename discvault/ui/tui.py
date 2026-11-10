@@ -5,6 +5,7 @@ from collections.abc import Collection
 from dataclasses import replace
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1890,7 +1891,12 @@ class DiscvaultApp(App[None]):
         view_btn.styles.display = "block" if view_eligible else "none"
 
     def _do_cover_art_view(self) -> None:
-        """Open the current candidate's cover-art URL in the system browser."""
+        """Open the current candidate's cover in the system image viewer.
+
+        The image is downloaded to a temporary file so the desktop's own
+        viewer opens it at full quality; if the download fails the URL is
+        handed to the system opener (browser) instead.
+        """
         from .. import artwork as artwork_mod
 
         meta = self._current_meta()
@@ -1900,15 +1906,50 @@ class DiscvaultApp(App[None]):
         if not url:
             self._announce("No cover-art URL to view.", severity="warning")
             return
+        self._start_cover_art_external_view(meta, url)
+
+    @work(thread=True, name="cover-art-view")
+    def _start_cover_art_external_view(self, meta: Metadata, url: str) -> None:
+        """Download the cover to a temp file and open it (worker thread)."""
+        from .. import artwork as artwork_mod
+
+        path: Path | None = None
+        try:
+            fetched = artwork_mod.fetch_cover_art(meta)
+            if fetched is not None:
+                ext = (
+                    meta.cover_art_ext
+                    or artwork_mod._ext_from_content_type(fetched.content_type)
+                    or artwork_mod._ext_from_url(fetched.url)
+                )
+                if ext not in {"jpg", "jpeg", "png", "webp"}:
+                    ext = "jpg"
+                directory = Path(tempfile.mkdtemp(prefix="discvault-cover-"))
+                path = directory / f"cover.{ext}"
+                path.write_bytes(fetched.content)
+        except Exception:
+            path = None
+        self.call_from_thread(self._finish_cover_art_external_view, path, url)
+
+    def _finish_cover_art_external_view(self, path: Path | None, url: str) -> None:
+        """Open the downloaded file, or the URL when there is no file."""
+        if path is None:
+            self._announce("Could not download the cover; opening its URL instead.", severity="warning")
+            self._open_cover_url_externally(url)
+            return
+        self._open_cover_url_externally(str(path))
+
+    def _open_cover_url_externally(self, target: str) -> None:
+        """Open a file path or URL with the system opener."""
         opener = shutil.which("xdg-open") or shutil.which("gio") or shutil.which("open")
         if not opener:
-            self._announce("No URL opener (xdg-open) available.", severity="warning")
+            self._announce("No opener (xdg-open) available.", severity="warning")
             return
-        cmd = [opener, "open", url] if opener.endswith("gio") else [opener, url]
+        cmd = [opener, "open", target] if opener.endswith("gio") else [opener, target]
         try:
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as exc:
-            self._announce(f"Could not open URL: {exc}", severity="error")
+            self._announce(f"Could not open the cover: {exc}", severity="error")
 
     def _do_cover_art_search(self) -> None:
         """Run a MusicBrainz search for cover art on the current candidate.

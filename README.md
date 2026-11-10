@@ -76,7 +76,7 @@ DiscVault is built around Linux CD tooling (`/dev/cdrom`, `/dev/sr0`). Some help
 
 - No audio fingerprinting; relies on disc structure and database coverage
 - ISO export only works for supported data-track layouts
-- TUI cover-art preview not yet implemented
+- The TUI cover-art view opens the system image viewer; there is no in-terminal preview yet
 
 ## Documentation
 

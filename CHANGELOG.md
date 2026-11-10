@@ -8,6 +8,7 @@ The project history starts at `v0.1`.
 
 ### Added
 
+- The TUI **View** button now downloads the cover and opens it in the system image viewer instead of opening its URL in the browser (the URL is still used if the download fails).
 - The TUI now checks, at startup and again before a rip, that the tools the selected outputs need are installed. Missing tools are logged with the feature they block and the install command, and a rip does not start until they are present, instead of failing partway through.
 - Manual Search now has Artist, Album, Year and Tracks fields next to the free-text box, and the results from MusicBrainz and Discogs are filtered to match the filled fields. Diverging results are hidden unless the new `manual_include_diverging` option (also a checkbox in the dialog) is on.
 - The audio rip stage now names the track being ripped by its number and title (for example `05 – Title`) instead of the raw file name, and the disc image stage appends the title to its `track N/M` label, when the metadata has a title for it.

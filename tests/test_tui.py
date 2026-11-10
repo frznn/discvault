@@ -1288,5 +1288,29 @@ class CandidateTableColumnsTests(unittest.TestCase):
         )
 
 
+class CoverExternalViewTests(unittest.TestCase):
+    """The View button hands a downloaded file (or, failing that, the URL) to the opener."""
+
+    @staticmethod
+    def _fake_app() -> SimpleNamespace:
+        return SimpleNamespace(opened=[], announced=[],
+                               _open_cover_url_externally=lambda t: None,
+                               _announce=lambda *a, **k: None)
+
+    def test_opens_downloaded_file(self) -> None:
+        app = self._fake_app()
+        app._open_cover_url_externally = app.opened.append
+        DiscvaultApp._finish_cover_art_external_view(app, Path("/tmp/x/cover.jpg"), "https://u/c.jpg")
+        self.assertEqual(app.opened, ["/tmp/x/cover.jpg"])
+
+    def test_falls_back_to_url_when_download_failed(self) -> None:
+        app = self._fake_app()
+        app._open_cover_url_externally = app.opened.append
+        app._announce = lambda msg, **k: app.announced.append(msg)
+        DiscvaultApp._finish_cover_art_external_view(app, None, "https://u/c.jpg")
+        self.assertEqual(app.opened, ["https://u/c.jpg"])
+        self.assertEqual(len(app.announced), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

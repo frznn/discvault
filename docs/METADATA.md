@@ -172,6 +172,8 @@ Cover art is downloaded automatically when:
 
 The image is saved as `cover.jpg` (or `.png`) in the album folder.
 
+In the TUI, **View** opens the candidate's cover in the system image viewer.
+
 Disable with `--no-cover-art` or `download_cover_art = false` in config.
 
 ## AccurateRip
