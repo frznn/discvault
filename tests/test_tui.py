@@ -63,6 +63,27 @@ class StatusLogSelectionTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
 
 
+    async def test_mouse_drag_selects_log_text(self) -> None:
+        # The mouse path needs "offset" metadata on the rendered strips; calling
+        # get_selection directly (above) cannot catch its absence.
+        from textual.app import App
+
+        class _App(App[None]):
+            def compose(self):
+                yield StatusRichLog(id="log", markup=True)
+
+        async with _App().run_test(size=(40, 10)) as pilot:
+            log = pilot.app.query_one("#log", StatusRichLog)
+            log.write("hello world")
+            log.write("second line")
+            await pilot.pause()
+            await pilot.mouse_down(log, offset=(0, 0))
+            await pilot.hover(log, offset=(5, 0))
+            await pilot.mouse_up(log, offset=(5, 0))
+            await pilot.pause()
+            self.assertEqual(pilot.app.screen.get_selected_text(), "hello")
+
+
 class TuiHelpersTests(unittest.TestCase):
     def test_status_log_scrolls_one_line_per_pointer_step(self) -> None:
         log = StatusRichLog()

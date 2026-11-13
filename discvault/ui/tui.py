@@ -14,6 +14,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.content import Content
 from textual.containers import Container, Horizontal, Vertical
+from textual.strip import Strip
 from textual.reactive import reactive
 from textual.containers import ScrollableContainer
 from textual.widgets import (
@@ -84,6 +85,13 @@ class StatusRichLog(RichLog):
         self._line_cache.clear()
         self.refresh()
 
+    def render_line(self, y: int) -> Strip:
+        # Textual maps a mouse position to text through "offset" metadata on
+        # the rendered strips (Log adds it; RichLog does not). Without it a
+        # drag over the log starts no selection at all.
+        scroll_x, scroll_y = self.scroll_offset
+        return super().render_line(y).apply_offsets(scroll_x, scroll_y + y)
+
     def _render_line(self, y: int, scroll_x: int, width: int):
         strip = super()._render_line(y, scroll_x, width)
         selection = self.text_selection
@@ -107,8 +115,6 @@ class StatusRichLog(RichLog):
         parts.append(line.crop(start, end).apply_style(style))
         if end < line.cell_length:
             parts.append(line.crop(end, line.cell_length))
-        from textual.strip import Strip
-
         return Strip.join(parts).crop_extend(scroll_x, scroll_x + width, self.rich_style)
 
     def _scroll_down_for_pointer(

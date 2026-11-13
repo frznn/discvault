@@ -6,6 +6,10 @@ The project history starts at `v0.1`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Selecting text in the status log with the mouse works again: dragging over the log did nothing, so there was never a selection for the copy key to copy.
+
 ## [0.5] - 2026-11-10
 
 ### Added
